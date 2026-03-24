@@ -247,11 +247,30 @@ brainjar status
 # rules    default (global), no-delete (+local)
 ```
 
+## Hooks
+
+brainjar integrates with Claude Code's hook system for automatic context injection. When hooks are installed, brainjar syncs your config on every session start — no manual `brainjar sync` needed.
+
+```bash
+# Install hooks (writes to ~/.claude/settings.json)
+brainjar hooks install
+
+# Install for this project only
+brainjar hooks install --local
+
+# Check hook status
+brainjar hooks status
+
+# Remove hooks
+brainjar hooks remove
+```
+
 ## Commands
 
 ```
 brainjar init [--default] [--obsidian] [--backend claude|codex]
 brainjar status [--sync] [--global|--local] [--short]
+brainjar sync [--quiet]
 brainjar compose <brain> [--task <text>]
 brainjar compose --persona <name> [--task <text>]
 
@@ -261,6 +280,7 @@ brainjar persona create|list|show|use|drop
 brainjar rules create|list|show|add|remove
 
 brainjar identity create|list|show|use|drop|unlock|get|status|lock
+brainjar hooks install|remove|status [--local]
 brainjar shell [--brain|--soul|--persona|--identity|--rules-add|--rules-remove]
 brainjar reset [--backend claude|codex]
 ```
