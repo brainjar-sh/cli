@@ -11,6 +11,8 @@ import { status } from './commands/status.js'
 import { reset } from './commands/reset.js'
 import { shell } from './commands/shell.js'
 import { compose } from './commands/compose.js'
+import { sync } from './commands/sync.js'
+import { hooks } from './commands/hooks.js'
 
 Cli.create('brainjar', {
   description: 'Shape how your AI thinks — identity, soul, persona, rules',
@@ -27,4 +29,6 @@ Cli.create('brainjar', {
   .command(reset)
   .command(shell)
   .command(compose)
+  .command(sync)
+  .command(hooks)
   .serve()
