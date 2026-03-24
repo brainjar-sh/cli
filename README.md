@@ -247,6 +247,29 @@ brainjar status
 # rules    default (global), no-delete (+local)
 ```
 
+## Pack
+
+Packs are self-contained, shareable bundles of a brain and all its layers — soul, persona, and rules. Export a brain as a pack directory, hand it to a teammate, and they import it in one command.
+
+A pack mirrors the `~/.brainjar/` structure with a `pack.yaml` manifest at the root. No tarballs, no magic — just files you can inspect with `ls` and `cat`.
+
+```bash
+# Export a brain as a pack
+brainjar pack export review                        # creates ./review/
+brainjar pack export review --out /tmp             # creates /tmp/review/
+brainjar pack export review --name my-review       # override pack name
+brainjar pack export review --version 1.0.0        # set version (default: 0.1.0)
+brainjar pack export review --author frank         # set author field
+
+# Import a pack
+brainjar pack import ./review                      # import into ~/.brainjar/
+brainjar pack import ./review --force              # overwrite conflicts
+brainjar pack import ./review --merge              # rename conflicts as <name>-from-<packname>
+brainjar pack import ./review --activate           # activate the brain after import
+```
+
+On conflict (a file already exists with different content), import fails by default and lists the conflicts. Use `--force` to overwrite or `--merge` to keep both versions. Identical files are silently skipped.
+
 ## Hooks
 
 brainjar integrates with Claude Code's hook system for automatic context injection. When hooks are installed, brainjar syncs your config on every session start — no manual `brainjar sync` needed.
@@ -280,6 +303,7 @@ brainjar persona create|list|show|use|drop
 brainjar rules create|list|show|add|remove
 
 brainjar identity create|list|show|use|drop|unlock|get|status|lock
+brainjar pack export|import
 brainjar hooks install|remove|status [--local]
 brainjar shell [--brain|--soul|--persona|--identity|--rules-add|--rules-remove]
 brainjar reset [--backend claude|codex]

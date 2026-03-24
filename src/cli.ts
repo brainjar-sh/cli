@@ -13,6 +13,7 @@ import { shell } from './commands/shell.js'
 import { compose } from './commands/compose.js'
 import { sync } from './commands/sync.js'
 import { hooks } from './commands/hooks.js'
+import { pack } from './commands/pack.js'
 
 Cli.create('brainjar', {
   description: 'Shape how your AI thinks — identity, soul, persona, rules',
@@ -31,4 +32,5 @@ Cli.create('brainjar', {
   .command(compose)
   .command(sync)
   .command(hooks)
+  .command(pack)
   .serve()
