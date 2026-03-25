@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.2.2
+
+### Patch Changes
+
+- 5125ea7: Remove audit job from CI (transitive dep vulnerabilities shouldn't block builds). Add npm downloads badge to README.
+
 ## 0.2.1
 
 ### Patch Changes

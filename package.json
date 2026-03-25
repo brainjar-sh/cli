@@ -1,6 +1,6 @@
 {
   "name": "@brainjar/cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Shape how your AI thinks — composable identity, soul, persona, and rules for AI agents",
   "type": "module",
   "license": "MIT",
