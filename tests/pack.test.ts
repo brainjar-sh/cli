@@ -114,8 +114,8 @@ beforeAll(() => {
       // GET /api/v1/state (for sync)
       if (url.pathname === '/api/v1/state' && req.method === 'GET') {
         return Response.json({
-          soul: { slug: null, scope: 'workspace' },
-          persona: { slug: null, scope: 'workspace' },
+          soul: null,
+          persona: null,
           rules: [],
         })
       }

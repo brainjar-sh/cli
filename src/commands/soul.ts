@@ -81,7 +81,7 @@ export const soul = Cli.create('soul', {
       if (c.options.short) {
         if (c.args.name) return c.args.name
         const state = await getEffectiveState(api)
-        return state.soul.slug ?? 'none'
+        return state.soul ?? 'none'
       }
 
       if (c.args.name) {
@@ -116,12 +116,12 @@ export const soul = Cli.create('soul', {
       }
 
       const state = await getEffectiveState(api)
-      if (!state.soul.slug) return { active: false }
+      if (!state.soul) return { active: false }
       try {
-        const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul.slug}`)
-        return { active: true, name: state.soul.slug, scope: state.soul.scope, title: soul.title, content: soul.content }
+        const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul}`)
+        return { active: true, name: state.soul, title: soul.title, content: soul.content }
       } catch {
-        return { active: false, name: state.soul.slug, error: 'Not found on server' }
+        return { active: false, name: state.soul, error: 'Not found on server' }
       }
     },
   })

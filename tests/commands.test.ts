@@ -22,9 +22,9 @@ interface MockStore {
   brains: Map<string, { slug: string; soul_slug: string; persona_slug: string; rule_slugs: string[] }>
   // Server-side state
   effectiveState: {
-    soul: { slug: string | null; scope: string }
-    persona: { slug: string | null; scope: string }
-    rules: { slug: string; scope: string }[]
+    soul: string | null
+    persona: string | null
+    rules: string[]
   }
   // Track mutations received via PUT /api/v1/state
   lastMutation: Record<string, unknown> | null
@@ -45,8 +45,8 @@ function resetStore() {
     rules: new Map(),
     brains: new Map(),
     effectiveState: {
-      soul: { slug: null, scope: 'workspace' },
-      persona: { slug: null, scope: 'workspace' },
+      soul: null,
+      persona: null,
       rules: [],
     },
     lastMutation: null,
@@ -81,25 +81,24 @@ beforeAll(() => {
 
           // Apply mutation to effective state for subsequent reads
           if (body.soul_slug !== undefined) {
-            store.effectiveState.soul = { slug: body.soul_slug as string | null, scope: project ? 'project' : 'workspace' }
+            store.effectiveState.soul = body.soul_slug as string | null
           }
           if (body.persona_slug !== undefined) {
-            store.effectiveState.persona = { slug: body.persona_slug as string | null, scope: project ? 'project' : 'workspace' }
+            store.effectiveState.persona = body.persona_slug as string | null
           }
           if (body.rule_slugs !== undefined) {
-            store.effectiveState.rules = (body.rule_slugs as string[]).map(slug => ({ slug, scope: project ? 'project' : 'workspace' }))
+            store.effectiveState.rules = body.rule_slugs as string[]
           }
           if (body.rules_to_add) {
-            const existing = store.effectiveState.rules.map(r => r.slug)
             for (const slug of body.rules_to_add as string[]) {
-              if (!existing.includes(slug)) {
-                store.effectiveState.rules.push({ slug, scope: project ? '+project' : 'workspace' })
+              if (!store.effectiveState.rules.includes(slug)) {
+                store.effectiveState.rules.push(slug)
               }
             }
           }
           if (body.rules_to_remove) {
             const toRemove = body.rules_to_remove as string[]
-            store.effectiveState.rules = store.effectiveState.rules.filter(r => !toRemove.includes(r.slug))
+            store.effectiveState.rules = store.effectiveState.rules.filter(r => !toRemove.includes(r))
           }
 
           return Response.json({ ok: true })
@@ -135,8 +134,8 @@ beforeAll(() => {
           } else if (body.persona) {
             personaSlug = body.persona as string
             // Use active soul from effective state
-            if (store.effectiveState.soul.slug) {
-              soulSlug = store.effectiveState.soul.slug
+            if (store.effectiveState.soul) {
+              soulSlug = store.effectiveState.soul
             }
             // Use persona's bundled rules
             const p = store.personas.get(personaSlug)
@@ -375,9 +374,9 @@ function setState(state: Partial<{
   rules: string[]
 }>) {
   store.effectiveState = {
-    soul: { slug: state.soul ?? null, scope: 'workspace' },
-    persona: { slug: state.persona ?? null, scope: 'workspace' },
-    rules: (state.rules ?? []).map(slug => ({ slug, scope: 'workspace' })),
+    soul: state.soul ?? null,
+    persona: state.persona ?? null,
+    rules: state.rules ?? [],
   }
 }
 
@@ -494,7 +493,7 @@ describe('soul commands', () => {
     setState({ soul: 'warrior' })
     await run(soul, ['drop', '--format', 'json'])
     expect(store.lastMutation).toEqual({ soul_slug: null })
-    expect(store.effectiveState.soul.slug).toBeNull()
+    expect(store.effectiveState.soul).toBeNull()
   })
 
   test('drop succeeds even when no active soul', async () => {
@@ -599,7 +598,7 @@ describe('persona commands', () => {
     setState({ persona: 'coder' })
     await run(persona, ['drop', '--format', 'json'])
     expect(store.lastMutation).toEqual({ persona_slug: null })
-    expect(store.effectiveState.persona.slug).toBeNull()
+    expect(store.effectiveState.persona).toBeNull()
   })
 
   test('drop succeeds even when no active persona', async () => {
@@ -685,16 +684,16 @@ describe('status command', () => {
 
   test('returns null for all layers when empty', async () => {
     const { parsed } = await run(status, ['--format', 'json'])
-    expect(parsed.soul).toEqual({ slug: null, scope: 'workspace' })
-    expect(parsed.persona).toEqual({ slug: null, scope: 'workspace' })
+    expect(parsed.soul).toBeNull()
+    expect(parsed.persona).toBeNull()
     expect(parsed.rules).toEqual([])
   })
 
-  test('returns active layers with scope annotations', async () => {
+  test('returns active layers', async () => {
     setState({ soul: 'warrior', persona: null, rules: ['security'] })
     const { parsed } = await run(status, ['--format', 'json'])
-    expect(parsed.soul).toEqual({ slug: 'warrior', scope: 'workspace' })
-    expect(parsed.rules).toEqual([{ slug: 'security', scope: 'workspace' }])
+    expect(parsed.soul).toBe('warrior')
+    expect(parsed.rules).toEqual(['security'])
   })
 
   test('--workspace shows only workspace state', async () => {
@@ -863,8 +862,8 @@ describe('brain commands', () => {
       persona_slug: 'reviewer',
       rule_slugs: ['security'],
     })
-    expect(store.effectiveState.soul.slug).toBe('craftsman')
-    expect(store.effectiveState.persona.slug).toBe('reviewer')
+    expect(store.effectiveState.soul).toBe('craftsman')
+    expect(store.effectiveState.persona).toBe('reviewer')
   })
 
   test('use errors on missing brain', async () => {

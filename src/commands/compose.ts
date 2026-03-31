@@ -51,7 +51,7 @@ export const compose = Cli.create('compose', {
     if (brainName) result.brain = brainName
     if (composed.soul) result.soul = composed.soul
     if (composed.token_estimate) result.token_estimate = composed.token_estimate
-    if (composed.warnings.length) result.warnings = composed.warnings
+    if (composed.warnings?.length) result.warnings = composed.warnings
 
     return result
   },

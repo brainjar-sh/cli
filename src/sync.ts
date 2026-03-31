@@ -29,40 +29,39 @@ async function assembleFromServer(api: BrainjarClient, state: ApiEffectiveState)
   const sections: string[] = []
   const warnings: string[] = []
 
-  if (state.soul.slug) {
+  if (state.soul) {
     try {
-      const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul.slug}`)
+      const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul}`)
       sections.push('')
       sections.push('## Soul')
       sections.push('')
       sections.push(soul.content.trim())
     } catch {
-      warnings.push(`Could not fetch soul "${state.soul.slug}"`)
+      warnings.push(`Could not fetch soul "${state.soul}"`)
     }
   }
 
-  if (state.persona.slug) {
+  if (state.persona) {
     try {
-      const persona = await api.get<ApiPersona>(`/api/v1/personas/${state.persona.slug}`)
+      const persona = await api.get<ApiPersona>(`/api/v1/personas/${state.persona}`)
       sections.push('')
       sections.push('## Persona')
       sections.push('')
       sections.push(persona.content.trim())
     } catch {
-      warnings.push(`Could not fetch persona "${state.persona.slug}"`)
+      warnings.push(`Could not fetch persona "${state.persona}"`)
     }
   }
 
-  const activeRules = state.rules.filter(r => !r.scope.startsWith('-'))
-  for (const rule of activeRules) {
+  for (const ruleSlug of state.rules) {
     try {
-      const ruleData = await api.get<ApiRule>(`/api/v1/rules/${rule.slug}`)
+      const ruleData = await api.get<ApiRule>(`/api/v1/rules/${ruleSlug}`)
       for (const entry of ruleData.entries) {
         sections.push('')
         sections.push(entry.content.trim())
       }
     } catch {
-      warnings.push(`Could not fetch rule "${rule.slug}"`)
+      warnings.push(`Could not fetch rule "${ruleSlug}"`)
     }
   }
 

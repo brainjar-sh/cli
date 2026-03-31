@@ -20,8 +20,8 @@ export const status = Cli.create('status', {
     if (c.options.short) {
       const state = await getEffectiveState(api)
       const parts = [
-        `soul: ${state.soul.slug ?? 'none'}`,
-        `persona: ${state.persona.slug ?? 'none'}`,
+        `soul: ${state.soul ?? 'none'}`,
+        `persona: ${state.persona ?? 'none'}`,
       ]
       return parts.join(' | ')
     }
@@ -74,19 +74,14 @@ export const status = Cli.create('status', {
       return result
     }
 
-    // Humans get a compact view with scope annotations
-    const fmtScope = (scope: string) => `(${scope})`
-
+    // Humans get a compact view
     const rulesLabel = state.rules.length
-      ? state.rules
-          .filter(r => !r.scope.startsWith('-'))
-          .map(r => `${r.slug} ${fmtScope(r.scope)}`)
-          .join(', ')
+      ? state.rules.join(', ')
       : null
 
     const result: Record<string, unknown> = {
-      soul: state.soul.slug ? `${state.soul.slug} ${fmtScope(state.soul.scope)}` : null,
-      persona: state.persona.slug ? `${state.persona.slug} ${fmtScope(state.persona.scope)}` : null,
+      soul: state.soul ?? null,
+      persona: state.persona ?? null,
       rules: rulesLabel,
     }
     if (synced) result.synced = synced

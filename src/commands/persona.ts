@@ -113,7 +113,7 @@ export const persona = Cli.create('persona', {
       if (c.options.short) {
         if (c.args.name) return c.args.name
         const state = await getEffectiveState(api)
-        return state.persona.slug ?? 'none'
+        return state.persona ?? 'none'
       }
 
       if (c.args.name) {
@@ -148,12 +148,12 @@ export const persona = Cli.create('persona', {
       }
 
       const state = await getEffectiveState(api)
-      if (!state.persona.slug) return { active: false }
+      if (!state.persona) return { active: false }
       try {
-        const p = await api.get<ApiPersona>(`/api/v1/personas/${state.persona.slug}`)
-        return { active: true, name: state.persona.slug, scope: state.persona.scope, title: p.title, content: p.content, rules: p.bundled_rules }
+        const p = await api.get<ApiPersona>(`/api/v1/personas/${state.persona}`)
+        return { active: true, name: state.persona, title: p.title, content: p.content, rules: p.bundled_rules }
       } catch {
-        return { active: false, name: state.persona.slug, error: 'Not found on server' }
+        return { active: false, name: state.persona, error: 'Not found on server' }
       }
     },
   })

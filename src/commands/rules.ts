@@ -86,7 +86,7 @@ export const rules = Cli.create('rules', {
       }
 
       const state = await getEffectiveState(api)
-      const active = state.rules.filter(r => !r.scope.startsWith('-')).map(r => r.slug)
+      const active = state.rules
       return { active, available: availableSlugs, rules: state.rules }
     },
   })

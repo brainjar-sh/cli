@@ -39,7 +39,7 @@ export const brain = Cli.create('brain', {
 
       const effective = await getEffectiveState(api)
 
-      if (!effective.soul.slug) {
+      if (!effective.soul) {
         throw new IncurError({
           code: 'NO_ACTIVE_SOUL',
           message: 'Cannot save brain: no active soul.',
@@ -47,7 +47,7 @@ export const brain = Cli.create('brain', {
         })
       }
 
-      if (!effective.persona.slug) {
+      if (!effective.persona) {
         throw new IncurError({
           code: 'NO_ACTIVE_PERSONA',
           message: 'Cannot save brain: no active persona.',
@@ -56,19 +56,17 @@ export const brain = Cli.create('brain', {
       }
 
       const activeRules = effective.rules
-        .filter(r => !r.scope.startsWith('-'))
-        .map(r => r.slug)
 
       await api.put<ApiBrain>(`/api/v1/brains/${name}`, {
-        soul_slug: effective.soul.slug,
-        persona_slug: effective.persona.slug,
+        soul_slug: effective.soul,
+        persona_slug: effective.persona,
         rule_slugs: activeRules,
       })
 
       return {
         saved: name,
-        soul: effective.soul.slug,
-        persona: effective.persona.slug,
+        soul: effective.soul,
+        persona: effective.persona,
         rules: activeRules,
       }
     },

@@ -3,14 +3,14 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sync } from '../src/sync.js'
-import type { ApiEffectiveState, ApiScopedValue, ApiScopedRule } from '../src/api-types.js'
+import type { ApiEffectiveState } from '../src/api-types.js'
 
 // ─── Mock API server ────────────────────────────────────────────────────────
 
 interface MockState {
-  soul: ApiScopedValue
-  persona: ApiScopedValue
-  rules: ApiScopedRule[]
+  soul: string | null
+  persona: string | null
+  rules: string[]
 }
 
 interface MockContent {
@@ -26,8 +26,8 @@ let mockContent: MockContent
 
 function resetMock() {
   mockState = {
-    soul: { slug: null, scope: 'workspace' },
-    persona: { slug: null, scope: 'workspace' },
+    soul: null,
+    persona: null,
     rules: [],
   }
   mockContent = {
@@ -123,9 +123,9 @@ function setMockState(opts: {
   rules?: string[]
 }) {
   mockState = {
-    soul: { slug: opts.soul ?? null, scope: 'workspace' },
-    persona: { slug: opts.persona ?? null, scope: 'workspace' },
-    rules: (opts.rules ?? []).map(slug => ({ slug, scope: 'workspace' })),
+    soul: opts.soul ?? null,
+    persona: opts.persona ?? null,
+    rules: opts.rules ?? [],
   }
 }
 

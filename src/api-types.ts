@@ -56,23 +56,11 @@ export interface ApiBrainList {
   brains: ApiBrain[]
 }
 
-/** Scoped value in effective state response. */
-export interface ApiScopedValue {
-  slug: string | null
-  scope: string // "workspace" | "project" | "session"
-}
-
-/** Scoped rule in effective state response. */
-export interface ApiScopedRule {
-  slug: string
-  scope: string // "workspace" | "+project" | "-project" | "+session" | "-session"
-}
-
 /** Effective state as returned by GET /api/v1/state. */
 export interface ApiEffectiveState {
-  soul: ApiScopedValue
-  persona: ApiScopedValue
-  rules: ApiScopedRule[]
+  soul: string | null
+  persona: string | null
+  rules: string[]
 }
 
 /** State override at a single scope, returned by GET /api/v1/state/override. */
@@ -93,14 +81,24 @@ export interface ApiStateMutation {
   rules_to_remove?: string[]
 }
 
+/** Token estimate breakdown from compose. */
+export interface ApiTokenEstimate {
+  soul: number
+  persona: number
+  rules: number
+  task: number
+  total: number
+}
+
 /** Response from POST /api/v1/compose. */
 export interface ApiComposeResult {
   prompt: string
   soul: string | null
   persona: string
+  brain?: string
   rules: string[]
-  token_estimate?: number
-  warnings: string[]
+  token_estimate?: ApiTokenEstimate
+  warnings?: string[]
 }
 
 // --- Content bundle types (export/import) ---
