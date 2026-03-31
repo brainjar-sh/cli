@@ -1,11 +1,10 @@
 import { Cli, z, Errors } from 'incur'
 
 const { IncurError } = Errors
-import { readdir, readFile, writeFile, access } from 'node:fs/promises'
-import { join, basename } from 'node:path'
-import { paths } from '../paths.js'
-import { type State, readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, parseLayerFrontmatter, stripFrontmatter, normalizeSlug, listAvailableRules } from '../state.js'
-import { sync } from '../sync.js'
+import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug } from '../state.js'
+// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { getApi } from '../client.js'
+import type { ApiPersona, ApiPersonaList, ApiRuleList } from '../api-types.js'
 
 export const persona = Cli.create('persona', {
   description: 'Manage personas — role behavior and workflow for the agent',
@@ -13,53 +12,48 @@ export const persona = Cli.create('persona', {
   .command('create', {
     description: 'Create a new persona',
     args: z.object({
-      name: z.string().describe('Persona name (will be used as filename)'),
+      name: z.string().describe('Persona name'),
     }),
     options: z.object({
       description: z.string().optional().describe('One-line description of the persona'),
       rules: z.array(z.string()).optional().describe('Rules to bundle with this persona'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'persona name')
-      const dest = join(paths.personas, `${name}.md`)
+      const api = await getApi()
 
+      // Check if it already exists
       try {
-        await access(dest)
+        await api.get<ApiPersona>(`/api/v1/personas/${name}`)
         throw new IncurError({
           code: 'PERSONA_EXISTS',
           message: `Persona "${name}" already exists.`,
-          hint: 'Choose a different name or edit the existing file.',
+          hint: 'Choose a different name or edit the existing persona.',
         })
       } catch (e) {
-        if (e instanceof IncurError) throw e
+        if (e instanceof IncurError && e.code === 'PERSONA_EXISTS') throw e
+        if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
       }
 
       const rulesList = c.options.rules ?? []
 
-      // Validate rules exist
-      const availableRules = await listAvailableRules()
-      const invalid = rulesList.filter(r => !availableRules.includes(r))
-      if (invalid.length > 0) {
-        throw new IncurError({
-          code: 'RULES_NOT_FOUND',
-          message: `Rules not found: ${invalid.join(', ')}`,
-          hint: `Available rules: ${availableRules.join(', ')}`,
-        })
+      // Validate rules exist on server
+      if (rulesList.length > 0) {
+        const available = await api.get<ApiRuleList>('/api/v1/rules')
+        const availableSlugs = available.rules.map(r => r.slug)
+        const invalid = rulesList.filter(r => !availableSlugs.includes(r))
+        if (invalid.length > 0) {
+          throw new IncurError({
+            code: 'RULES_NOT_FOUND',
+            message: `Rules not found: ${invalid.join(', ')}`,
+            hint: `Available rules: ${availableSlugs.join(', ')}`,
+          })
+        }
       }
+
+      const effectiveRules = rulesList.length > 0 ? rulesList : ['default']
 
       const lines: string[] = []
-
-      // Frontmatter — always write it (rules default to [default])
-      const effectiveRules = rulesList.length > 0 ? rulesList : ['default']
-      lines.push('---')
-      lines.push('rules:')
-      for (const rule of effectiveRules) {
-        lines.push(`  - ${rule}`)
-      }
-      lines.push('---')
-      lines.push('')
-
       lines.push(`# ${name}`)
       lines.push('')
       if (c.options.description) {
@@ -77,33 +71,30 @@ export const persona = Cli.create('persona', {
       lines.push('')
 
       const content = lines.join('\n')
-      await writeFile(dest, content)
+      await api.put<ApiPersona>(`/api/v1/personas/${name}`, {
+        content,
+        bundled_rules: effectiveRules,
+      })
 
       if (c.agent || c.formatExplicit) {
-        return {
-          created: dest,
-          name,
-          rules: effectiveRules,
-          template: content,
-        }
+        return { created: name, name, rules: effectiveRules, template: content }
       }
 
       return {
-        created: dest,
+        created: name,
         name,
         rules: effectiveRules,
         template: `\n${content}`,
-        next: `Edit ${dest} to fill in your persona, then run \`brainjar persona use ${name}\` to activate.`,
+        next: `Run \`brainjar persona show ${name}\` to view, then \`brainjar persona use ${name}\` to activate.`,
       }
     },
   })
   .command('list', {
     description: 'List available personas',
     async run() {
-      await requireBrainjarDir()
-      const entries = await readdir(paths.personas).catch(() => [])
-      const personas = entries.filter(f => f.endsWith('.md')).map(f => basename(f, '.md'))
-      return { personas }
+      const api = await getApi()
+      const result = await api.get<ApiPersonaList>('/api/v1/personas')
+      return { personas: result.personas.map(p => p.slug) }
     },
   })
   .command('show', {
@@ -116,10 +107,11 @@ export const persona = Cli.create('persona', {
       short: z.boolean().default(false).describe('Print only the active persona name'),
     }),
     async run(c) {
-      await requireBrainjarDir()
+      const api = await getApi()
 
       if (c.options.short) {
         if (c.args.name) return c.args.name
+        await requireBrainjarDir()
         const global = await readState()
         const local = await readLocalState()
         const env = readEnvState()
@@ -127,59 +119,54 @@ export const persona = Cli.create('persona', {
         return effective.persona.value ?? 'none'
       }
 
-      // If a specific name was given, show that persona directly
       if (c.args.name) {
         const name = normalizeSlug(c.args.name, 'persona name')
         try {
-          const raw = await readFile(join(paths.personas, `${name}.md`), 'utf-8')
-          const frontmatter = parseLayerFrontmatter(raw)
-          const content = stripFrontmatter(raw)
-          const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
-          return { name, title, content, ...frontmatter }
-        } catch {
-          throw new IncurError({
-            code: 'PERSONA_NOT_FOUND',
-            message: `Persona "${name}" not found.`,
-            hint: 'Run `brainjar persona list` to see available personas.',
-          })
+          const p = await api.get<ApiPersona>(`/api/v1/personas/${name}`)
+          return { name, title: p.title, content: p.content, rules: p.bundled_rules }
+        } catch (e) {
+          if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+            throw new IncurError({
+              code: 'PERSONA_NOT_FOUND',
+              message: `Persona "${name}" not found.`,
+              hint: 'Run `brainjar persona list` to see available personas.',
+            })
+          }
+          throw e
         }
       }
 
       if (c.options.local) {
+        await requireBrainjarDir()
         const local = await readLocalState()
         if (!('persona' in local)) return { active: false, scope: 'local', note: 'No local persona override (cascades from global)' }
         if (local.persona === null) return { active: false, scope: 'local', name: null, note: 'Explicitly unset at local scope' }
         try {
-          const raw = await readFile(join(paths.personas, `${local.persona}.md`), 'utf-8')
-          const frontmatter = parseLayerFrontmatter(raw)
-          const content = stripFrontmatter(raw)
-          const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
-          return { active: true, scope: 'local', name: local.persona, title, content, ...frontmatter }
+          const p = await api.get<ApiPersona>(`/api/v1/personas/${local.persona}`)
+          return { active: true, scope: 'local', name: local.persona, title: p.title, content: p.content, rules: p.bundled_rules }
         } catch {
-          return { active: false, scope: 'local', name: local.persona, error: 'File not found' }
+          return { active: false, scope: 'local', name: local.persona, error: 'Not found on server' }
         }
       }
 
+      await requireBrainjarDir()
       const global = await readState()
       const local = await readLocalState()
       const env = readEnvState()
       const effective = mergeState(global, local, env)
       if (!effective.persona.value) return { active: false }
       try {
-        const raw = await readFile(join(paths.personas, `${effective.persona.value}.md`), 'utf-8')
-        const frontmatter = parseLayerFrontmatter(raw)
-        const content = stripFrontmatter(raw)
-        const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
-        return { active: true, name: effective.persona.value, scope: effective.persona.scope, title, content, ...frontmatter }
+        const p = await api.get<ApiPersona>(`/api/v1/personas/${effective.persona.value}`)
+        return { active: true, name: effective.persona.value, scope: effective.persona.scope, title: p.title, content: p.content, rules: p.bundled_rules }
       } catch {
-        return { active: false, name: effective.persona.value, error: 'File not found' }
+        return { active: false, name: effective.persona.value, error: 'Not found on server' }
       }
     },
   })
   .command('use', {
     description: 'Activate a persona',
     args: z.object({
-      name: z.string().describe('Persona name (filename without .md in ~/.brainjar/personas/)'),
+      name: z.string().describe('Persona name'),
     }),
     options: z.object({
       local: z.boolean().default(false).describe('Write to local .claude/CLAUDE.md instead of global'),
@@ -187,42 +174,47 @@ export const persona = Cli.create('persona', {
     async run(c) {
       await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'persona name')
-      const source = join(paths.personas, `${name}.md`)
-      let raw: string
+      const api = await getApi()
+
+      // Validate and get bundled rules
+      let persona: ApiPersona
       try {
-        raw = await readFile(source, 'utf-8')
-      } catch {
-        throw new IncurError({
-          code: 'PERSONA_NOT_FOUND',
-          message: `Persona "${name}" not found.`,
-          hint: 'Run `brainjar persona list` to see available personas.',
-        })
+        persona = await api.get<ApiPersona>(`/api/v1/personas/${name}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'PERSONA_NOT_FOUND',
+            message: `Persona "${name}" not found.`,
+            hint: 'Run `brainjar persona list` to see available personas.',
+          })
+        }
+        throw e
       }
 
-      const frontmatter = parseLayerFrontmatter(raw)
+      const bundledRules = persona.bundled_rules
 
       if (c.options.local) {
         await withLocalStateLock(async () => {
           const local = await readLocalState()
           local.persona = name
-          if (frontmatter.rules.length > 0) {
-            local.rules = { ...local.rules, add: frontmatter.rules }
+          if (bundledRules.length > 0) {
+            local.rules = { ...local.rules, add: bundledRules }
           }
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
           const state = await readState()
           state.persona = name
-          if (frontmatter.rules.length > 0) state.rules = frontmatter.rules
+          if (bundledRules.length > 0) state.rules = bundledRules
           await writeState(state)
-          await sync()
+          // sync() removed — phase 3
         })
       }
 
       const result: Record<string, unknown> = { activated: name, local: c.options.local }
-      if (frontmatter.rules.length > 0) result.rules = frontmatter.rules
+      if (bundledRules.length > 0) result.rules = bundledRules
       return result
     },
   })
@@ -238,7 +230,7 @@ export const persona = Cli.create('persona', {
           const local = await readLocalState()
           delete local.persona
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
@@ -251,7 +243,7 @@ export const persona = Cli.create('persona', {
           }
           state.persona = null
           await writeState(state)
-          await sync()
+          // sync() removed — phase 3
         })
       }
       return { deactivated: true, local: c.options.local }

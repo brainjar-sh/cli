@@ -1,10 +1,6 @@
 import { Cli, z, Errors } from 'incur'
 
 const { IncurError } = Errors
-import { readdir, readFile, writeFile, access, rm } from 'node:fs/promises'
-import { join, basename } from 'node:path'
-import { stringify as stringifyYaml } from 'yaml'
-import { paths } from '../paths.js'
 import {
   readState,
   writeState,
@@ -17,8 +13,9 @@ import {
   requireBrainjarDir,
   normalizeSlug,
 } from '../state.js'
-import { readBrain, type BrainConfig } from '../brain.js'
-import { sync } from '../sync.js'
+// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { getApi } from '../client.js'
+import type { ApiBrain, ApiBrainList, ApiSoul, ApiPersona } from '../api-types.js'
 
 export const brain = Cli.create('brain', {
   description: 'Manage brains — full-stack configuration snapshots (soul + persona + rules)',
@@ -26,31 +23,32 @@ export const brain = Cli.create('brain', {
   .command('save', {
     description: 'Snapshot current effective state as a named brain',
     args: z.object({
-      name: z.string().describe('Brain name (will be used as filename)'),
+      name: z.string().describe('Brain name'),
     }),
     options: z.object({
-      overwrite: z.boolean().default(false).describe('Overwrite existing brain file'),
+      overwrite: z.boolean().default(false).describe('Overwrite existing brain'),
     }),
     async run(c) {
       await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'brain name')
-      const dest = join(paths.brains, `${name}.yaml`)
+      const api = await getApi()
 
       // Check for existing brain
       if (!c.options.overwrite) {
         try {
-          await access(dest)
+          await api.get<ApiBrain>(`/api/v1/brains/${name}`)
           throw new IncurError({
             code: 'BRAIN_EXISTS',
             message: `Brain "${name}" already exists.`,
             hint: 'Use --overwrite to replace it, or choose a different name.',
           })
         } catch (e) {
-          if (e instanceof IncurError) throw e
+          if (e instanceof IncurError && e.code === 'BRAIN_EXISTS') throw e
+          if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
         }
       }
 
-      // Read effective state
+      // Read effective state (still filesystem-based until phase 3)
       const globalState = await readState()
       const localState = await readLocalState()
       const envState = readEnvState()
@@ -76,15 +74,18 @@ export const brain = Cli.create('brain', {
         .filter(r => !r.scope.startsWith('-'))
         .map(r => r.value)
 
-      const config: BrainConfig = {
+      await api.put<ApiBrain>(`/api/v1/brains/${name}`, {
+        soul_slug: effective.soul.value,
+        persona_slug: effective.persona.value,
+        rule_slugs: activeRules,
+      })
+
+      return {
+        saved: name,
         soul: effective.soul.value,
         persona: effective.persona.value,
         rules: activeRules,
       }
-
-      await writeFile(dest, stringifyYaml(config))
-
-      return { saved: name, ...config }
     },
   })
   .command('use', {
@@ -98,63 +99,85 @@ export const brain = Cli.create('brain', {
     async run(c) {
       await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'brain name')
-      const config = await readBrain(name)
+      const api = await getApi()
+
+      let config: ApiBrain
+      try {
+        config = await api.get<ApiBrain>(`/api/v1/brains/${name}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'BRAIN_NOT_FOUND',
+            message: `Brain "${name}" not found.`,
+            hint: 'Run `brainjar brain list` to see available brains.',
+          })
+        }
+        throw e
+      }
 
       // Validate soul exists
       try {
-        await readFile(join(paths.souls, `${config.soul}.md`), 'utf-8')
-      } catch {
-        throw new IncurError({
-          code: 'SOUL_NOT_FOUND',
-          message: `Brain "${name}" references soul "${config.soul}" which does not exist.`,
-          hint: 'Create the soul first or update the brain file.',
-        })
+        await api.get<ApiSoul>(`/api/v1/souls/${config.soul_slug}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'SOUL_NOT_FOUND',
+            message: `Brain "${name}" references soul "${config.soul_slug}" which does not exist.`,
+            hint: 'Create the soul first or update the brain.',
+          })
+        }
+        throw e
       }
 
       // Validate persona exists
       try {
-        await readFile(join(paths.personas, `${config.persona}.md`), 'utf-8')
-      } catch {
-        throw new IncurError({
-          code: 'PERSONA_NOT_FOUND',
-          message: `Brain "${name}" references persona "${config.persona}" which does not exist.`,
-          hint: 'Create the persona first or update the brain file.',
-        })
+        await api.get<ApiPersona>(`/api/v1/personas/${config.persona_slug}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'PERSONA_NOT_FOUND',
+            message: `Brain "${name}" references persona "${config.persona_slug}" which does not exist.`,
+            hint: 'Create the persona first or update the brain.',
+          })
+        }
+        throw e
       }
 
       if (c.options.local) {
         await withLocalStateLock(async () => {
           const local = await readLocalState()
-          local.soul = config.soul
-          local.persona = config.persona
-          // Replace rules entirely — brain is a complete snapshot
-          local.rules = { add: config.rules, remove: [] }
+          local.soul = config.soul_slug
+          local.persona = config.persona_slug
+          local.rules = { add: config.rule_slugs, remove: [] }
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
           const state = await readState()
-          state.soul = config.soul
-          state.persona = config.persona
-          state.rules = config.rules
+          state.soul = config.soul_slug
+          state.persona = config.persona_slug
+          state.rules = config.rule_slugs
           await writeState(state)
-          await sync()
+          // sync() removed — phase 3
         })
       }
 
-      return { activated: name, local: c.options.local, ...config }
+      return {
+        activated: name,
+        local: c.options.local,
+        soul: config.soul_slug,
+        persona: config.persona_slug,
+        rules: config.rule_slugs,
+      }
     },
   })
   .command('list', {
     description: 'List available brains',
     async run() {
-      await requireBrainjarDir()
-      const entries = await readdir(paths.brains).catch(() => [])
-      const brains = entries
-        .filter(f => f.endsWith('.yaml'))
-        .map(f => basename(f, '.yaml'))
-      return { brains }
+      const api = await getApi()
+      const result = await api.get<ApiBrainList>('/api/v1/brains')
+      return { brains: result.brains.map(b => b.slug) }
     },
   })
   .command('show', {
@@ -163,10 +186,22 @@ export const brain = Cli.create('brain', {
       name: z.string().describe('Brain name to show'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'brain name')
-      const config = await readBrain(name)
-      return { name, ...config }
+      const api = await getApi()
+
+      try {
+        const config = await api.get<ApiBrain>(`/api/v1/brains/${name}`)
+        return { name, soul: config.soul_slug, persona: config.persona_slug, rules: config.rule_slugs }
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'BRAIN_NOT_FOUND',
+            message: `Brain "${name}" not found.`,
+            hint: 'Run `brainjar brain list` to see available brains.',
+          })
+        }
+        throw e
+      }
     },
   })
   .command('drop', {
@@ -175,21 +210,21 @@ export const brain = Cli.create('brain', {
       name: z.string().describe('Brain name to delete'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'brain name')
-      const file = join(paths.brains, `${name}.yaml`)
+      const api = await getApi()
 
       try {
-        await access(file)
-      } catch {
-        throw new IncurError({
-          code: 'BRAIN_NOT_FOUND',
-          message: `Brain "${name}" not found.`,
-          hint: 'Run `brainjar brain list` to see available brains.',
-        })
+        await api.delete(`/api/v1/brains/${name}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'BRAIN_NOT_FOUND',
+            message: `Brain "${name}" not found.`,
+            hint: 'Run `brainjar brain list` to see available brains.',
+          })
+        }
+        throw e
       }
-
-      await rm(file)
 
       return { dropped: name }
     },
