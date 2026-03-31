@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import { readConfig } from './config.js'
 import { getLocalDir } from './paths.js'
 import { access } from 'node:fs/promises'
+import { ensureRunning } from './daemon.js'
 
 const { IncurError } = Errors
 
@@ -133,4 +134,14 @@ export async function createClient(options?: ClientOptions): Promise<BrainjarCli
       return request<T>('DELETE', path, undefined, options)
     },
   }
+}
+
+/**
+ * Ensure the server is running and return a connected client.
+ * Convenience wrapper — commands should use this instead of calling
+ * ensureRunning() + createClient() separately.
+ */
+export async function getApi(options?: ClientOptions): Promise<BrainjarClient> {
+  await ensureRunning()
+  return createClient(options)
 }

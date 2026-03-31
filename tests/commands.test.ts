@@ -1,8 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, afterAll, beforeAll } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { parse as parseYaml } from 'yaml'
 import { readState, writeState, readLocalState } from '../src/state.js'
 
 import { init } from '../src/commands/init.js'
@@ -14,6 +13,152 @@ import { reset } from '../src/commands/reset.js'
 import { brain } from '../src/commands/brain.js'
 import { compose } from '../src/commands/compose.js'
 import { shell } from '../src/commands/shell.js'
+
+// ─── Mock API server ────────────────────────────────────────────────────────
+
+interface MockStore {
+  souls: Map<string, { slug: string; title: string | null; content: string }>
+  personas: Map<string, { slug: string; title: string | null; content: string; bundled_rules: string[] }>
+  rules: Map<string, { slug: string; entries: { name: string; content: string }[] }>
+  brains: Map<string, { slug: string; soul_slug: string; persona_slug: string; rule_slugs: string[] }>
+}
+
+let mockServer: ReturnType<typeof Bun.serve>
+let mockServerUrl: string
+let store: MockStore
+
+function resetStore() {
+  store = {
+    souls: new Map(),
+    personas: new Map(),
+    rules: new Map(),
+    brains: new Map(),
+  }
+}
+
+beforeAll(() => {
+  resetStore()
+  mockServer = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      const path = url.pathname
+      const method = req.method
+
+      // Health check
+      if (path === '/healthz') return Response.json({ status: 'ok' })
+
+      // Souls
+      if (path === '/api/v1/souls' && method === 'GET') {
+        const list = [...store.souls.values()].map(s => ({ slug: s.slug, title: s.title }))
+        return Response.json({ souls: list })
+      }
+      const soulMatch = path.match(/^\/api\/v1\/souls\/([^/]+)$/)
+      if (soulMatch) {
+        const slug = soulMatch[1]
+        if (method === 'GET') {
+          const s = store.souls.get(slug)
+          if (!s) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+          return Response.json(s)
+        }
+        if (method === 'PUT') {
+          return (async () => {
+            const body = await req.json() as { content: string }
+            const title = body.content.split('\n').find((l: string) => l.startsWith('# '))?.replace('# ', '') ?? null
+            const entry = { slug, title, content: body.content }
+            store.souls.set(slug, entry)
+            return Response.json(entry)
+          })()
+        }
+      }
+
+      // Personas
+      if (path === '/api/v1/personas' && method === 'GET') {
+        const list = [...store.personas.values()].map(p => ({ slug: p.slug, title: p.title }))
+        return Response.json({ personas: list })
+      }
+      const personaMatch = path.match(/^\/api\/v1\/personas\/([^/]+)$/)
+      if (personaMatch) {
+        const slug = personaMatch[1]
+        if (method === 'GET') {
+          const p = store.personas.get(slug)
+          if (!p) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+          return Response.json(p)
+        }
+        if (method === 'PUT') {
+          return (async () => {
+            const body = await req.json() as { content: string; bundled_rules?: string[] }
+            const title = body.content.split('\n').find((l: string) => l.startsWith('# '))?.replace('# ', '') ?? null
+            const entry = { slug, title, content: body.content, bundled_rules: body.bundled_rules ?? [] }
+            store.personas.set(slug, entry)
+            return Response.json(entry)
+          })()
+        }
+      }
+
+      // Rules
+      if (path === '/api/v1/rules' && method === 'GET') {
+        const list = [...store.rules.values()].map(r => ({ slug: r.slug, entry_count: r.entries.length }))
+        return Response.json({ rules: list })
+      }
+      const ruleMatch = path.match(/^\/api\/v1\/rules\/([^/]+)$/)
+      if (ruleMatch) {
+        const slug = ruleMatch[1]
+        if (method === 'GET') {
+          const r = store.rules.get(slug)
+          if (!r) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+          return Response.json(r)
+        }
+        if (method === 'PUT') {
+          return (async () => {
+            const body = await req.json() as { entries: { name: string; content: string }[] }
+            const entry = { slug, entries: body.entries }
+            store.rules.set(slug, entry)
+            return Response.json(entry)
+          })()
+        }
+      }
+
+      // Brains
+      if (path === '/api/v1/brains' && method === 'GET') {
+        const list = [...store.brains.values()]
+        return Response.json({ brains: list })
+      }
+      const brainMatch = path.match(/^\/api\/v1\/brains\/([^/]+)$/)
+      if (brainMatch) {
+        const slug = brainMatch[1]
+        if (method === 'GET') {
+          const b = store.brains.get(slug)
+          if (!b) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+          return Response.json(b)
+        }
+        if (method === 'PUT') {
+          return (async () => {
+            const body = await req.json() as { soul_slug: string; persona_slug: string; rule_slugs: string[] }
+            const entry = { slug, ...body }
+            store.brains.set(slug, entry)
+            return Response.json(entry)
+          })()
+        }
+        if (method === 'DELETE') {
+          const b = store.brains.get(slug)
+          if (!b) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+          store.brains.delete(slug)
+          return Response.json({ deleted: true })
+        }
+      }
+
+      return Response.json({ error: 'Not found' }, { status: 404 })
+    },
+  })
+  mockServerUrl = `http://localhost:${mockServer.port}`
+})
+
+afterAll(() => {
+  mockServer?.stop()
+})
+
+// ─── Shared helpers ─────────────────────────────────────────────────────────
 
 const originalBrainjarHome = process.env.BRAINJAR_HOME
 const originalTestHome = process.env.BRAINJAR_TEST_HOME
@@ -48,8 +193,14 @@ async function setup() {
   await mkdir(join(brainjarDir, 'personas'), { recursive: true })
   await mkdir(join(brainjarDir, 'rules'), { recursive: true })
   await mkdir(join(brainjarDir, 'brains'), { recursive: true })
+  // Write config pointing at mock server
+  await writeFile(
+    join(brainjarDir, 'config.yaml'),
+    `server:\n  url: ${mockServerUrl}\n  mode: remote\nworkspace: test\n`,
+  )
   origCwd = process.cwd()
   process.chdir(backendDir)
+  resetStore()
 }
 
 async function teardown() {
@@ -98,27 +249,45 @@ async function setState(state: Partial<{
   })
 }
 
+/** Seed content into mock server store. */
+function seedSoul(slug: string, content: string) {
+  const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
+  store.souls.set(slug, { slug, title, content })
+}
+
+function seedPersona(slug: string, content: string, bundled_rules: string[] = []) {
+  const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
+  store.personas.set(slug, { slug, title, content, bundled_rules })
+}
+
+function seedRule(slug: string, content: string) {
+  store.rules.set(slug, { slug, entries: [{ name: `${slug}.md`, content }] })
+}
+
+function seedBrain(slug: string, soul_slug: string, persona_slug: string, rule_slugs: string[] = []) {
+  store.brains.set(slug, { slug, soul_slug, persona_slug, rule_slugs })
+}
+
 // ─── soul ────────────────────────────────────────────────────────────────────
 
 describe('soul commands', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  test('create writes a soul file', async () => {
+  test('create creates a soul on server', async () => {
     const { parsed } = await run(soul, ['create', 'warrior', '--format', 'json'])
     expect(parsed.name).toBe('warrior')
-    const content = await readFile(join(brainjarDir, 'souls', 'warrior.md'), 'utf-8')
-    expect(content).toContain('# warrior')
+    expect(store.souls.has('warrior')).toBe(true)
   })
 
   test('create with description', async () => {
-    await run(soul, ['create', 'thinker', '--description', 'Deep and analytical', '--format', 'json'])
-    const content = await readFile(join(brainjarDir, 'souls', 'thinker.md'), 'utf-8')
-    expect(content).toContain('Deep and analytical')
+    const { parsed } = await run(soul, ['create', 'thinker', '--description', 'Deep and analytical', '--format', 'json'])
+    expect(parsed.name).toBe('thinker')
+    expect(store.souls.get('thinker')?.content).toContain('Deep and analytical')
   })
 
   test('create rejects duplicate', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# warrior')
+    seedSoul('warrior', '# warrior')
     const { parsed, exitCode } = await run(soul, ['create', 'warrior', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('SOUL_EXISTS')
@@ -130,8 +299,8 @@ describe('soul commands', () => {
   })
 
   test('list returns available souls', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'alpha.md'), '# Alpha')
-    await writeFile(join(brainjarDir, 'souls', 'bravo.md'), '# Bravo')
+    seedSoul('alpha', '# Alpha')
+    seedSoul('bravo', '# Bravo')
     const { parsed } = await run(soul, ['list', '--format', 'json'])
     expect(parsed.souls).toContain('alpha')
     expect(parsed.souls).toContain('bravo')
@@ -142,8 +311,21 @@ describe('soul commands', () => {
     expect(parsed.souls).toEqual([])
   })
 
+  test('show returns named soul content', async () => {
+    seedSoul('warrior', '# Warrior\n\nBold and brave.')
+    const { parsed } = await run(soul, ['show', 'warrior', '--format', 'json'])
+    expect(parsed.name).toBe('warrior')
+    expect(parsed.content).toContain('Bold and brave')
+  })
+
+  test('show errors on missing named soul', async () => {
+    const { exitCode, parsed } = await run(soul, ['show', 'ghost', '--format', 'json'])
+    expect(exitCode).toBe(1)
+    expect(parsed.code).toBe('SOUL_NOT_FOUND')
+  })
+
   test('show returns active soul content', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior\n\nBold and brave.')
+    seedSoul('warrior', '# Warrior\n\nBold and brave.')
     await setState({ soul: 'warrior', backend: 'claude' })
     const { parsed } = await run(soul, ['show', '--format', 'json'])
     expect(parsed.active).toBe(true)
@@ -158,7 +340,7 @@ describe('soul commands', () => {
   })
 
   test('use activates soul and updates state', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
+    seedSoul('warrior', '# Warrior')
     await setState({ backend: 'claude' })
     const { parsed } = await run(soul, ['use', 'warrior', '--local', '--format', 'json'])
     expect(parsed.activated).toBe('warrior')
@@ -172,20 +354,18 @@ describe('soul commands', () => {
   })
 
   test('drop deactivates active soul', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
+    seedSoul('warrior', '# Warrior')
     await setState({ soul: 'warrior', backend: 'claude' })
     const { parsed } = await run(soul, ['drop', '--local', '--format', 'json'])
     expect(parsed.deactivated).toBe(true)
   })
 
   test('drop --local removes key from local state instead of nullifying', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
+    seedSoul('warrior', '# Warrior')
     await setState({ soul: 'warrior', backend: 'claude' })
-    // First set a local override
     await run(soul, ['use', 'warrior', '--local', '--format', 'json'])
     let local = await readLocalState()
     expect('soul' in local).toBe(true)
-    // Drop the local override
     await run(soul, ['drop', '--local', '--format', 'json'])
     local = await readLocalState()
     expect('soul' in local).toBe(false)
@@ -193,7 +373,6 @@ describe('soul commands', () => {
 
   test('drop errors when no active soul', async () => {
     await setState({ backend: 'claude' })
-    // Error throws before sync(), so no global side effect
     const { exitCode, parsed } = await run(soul, ['drop', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('NO_ACTIVE_SOUL')
@@ -206,19 +385,18 @@ describe('persona commands', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  test('create writes a persona file', async () => {
+  test('create creates a persona on server', async () => {
     const { parsed } = await run(persona, ['create', 'coder', '--format', 'json'])
     expect(parsed.name).toBe('coder')
-    const content = await readFile(join(brainjarDir, 'personas', 'coder.md'), 'utf-8')
-    expect(content).toContain('# coder')
+    expect(store.personas.has('coder')).toBe(true)
   })
 
-  test('create with bundled rules writes frontmatter', async () => {
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
-    await run(persona, ['create', 'secure-coder', '--rules', 'security', '--format', 'json'])
-    const content = await readFile(join(brainjarDir, 'personas', 'secure-coder.md'), 'utf-8')
-    expect(content).toContain('---')
-    expect(content).toContain('- security')
+  test('create with bundled rules validates on server', async () => {
+    seedRule('security', '# Security')
+    const { parsed } = await run(persona, ['create', 'secure-coder', '--rules', 'security', '--format', 'json'])
+    expect(parsed.name).toBe('secure-coder')
+    expect(parsed.rules).toContain('security')
+    expect(store.personas.get('secure-coder')?.bundled_rules).toContain('security')
   })
 
   test('create rejects invalid bundled rules', async () => {
@@ -228,22 +406,36 @@ describe('persona commands', () => {
   })
 
   test('create rejects duplicate', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# coder')
+    seedPersona('coder', '# coder')
     const { exitCode, parsed } = await run(persona, ['create', 'coder', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('PERSONA_EXISTS')
   })
 
   test('list returns available personas', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# Coder')
-    await writeFile(join(brainjarDir, 'personas', 'writer.md'), '# Writer')
+    seedPersona('coder', '# Coder')
+    seedPersona('writer', '# Writer')
     const { parsed } = await run(persona, ['list', '--format', 'json'])
     expect(parsed.personas).toContain('coder')
     expect(parsed.personas).toContain('writer')
   })
 
-  test('show returns active persona with frontmatter rules', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '---\nrules:\n  - security\n---\n\n# Coder\n\nShip it.')
+  test('show returns named persona content', async () => {
+    seedPersona('coder', '# Coder\n\nShip it.', ['security'])
+    const { parsed } = await run(persona, ['show', 'coder', '--format', 'json'])
+    expect(parsed.name).toBe('coder')
+    expect(parsed.content).toContain('Ship it')
+    expect(parsed.rules).toEqual(['security'])
+  })
+
+  test('show errors on missing named persona', async () => {
+    const { exitCode, parsed } = await run(persona, ['show', 'ghost', '--format', 'json'])
+    expect(exitCode).toBe(1)
+    expect(parsed.code).toBe('PERSONA_NOT_FOUND')
+  })
+
+  test('show returns active persona with bundled rules', async () => {
+    seedPersona('coder', '# Coder\n\nShip it.', ['security'])
     await setState({ persona: 'coder', backend: 'claude' })
     const { parsed } = await run(persona, ['show', '--format', 'json'])
     expect(parsed.active).toBe(true)
@@ -252,15 +444,15 @@ describe('persona commands', () => {
   })
 
   test('use activates persona', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# Coder')
+    seedPersona('coder', '# Coder')
     await setState({ backend: 'claude' })
     const { parsed } = await run(persona, ['use', 'coder', '--local', '--format', 'json'])
     expect(parsed.activated).toBe('coder')
   })
 
   test('use with bundled rules activates rules too', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '---\nrules:\n  - security\n---\n\n# Coder')
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
+    seedPersona('coder', '# Coder', ['security'])
+    seedRule('security', '# Security')
     await setState({ backend: 'claude' })
     const { parsed } = await run(persona, ['use', 'coder', '--local', '--format', 'json'])
     expect(parsed.activated).toBe('coder')
@@ -275,14 +467,14 @@ describe('persona commands', () => {
   })
 
   test('drop deactivates active persona', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# Coder')
+    seedPersona('coder', '# Coder')
     await setState({ persona: 'coder', backend: 'claude' })
     const { parsed } = await run(persona, ['drop', '--local', '--format', 'json'])
     expect(parsed.deactivated).toBe(true)
   })
 
   test('drop --local removes key from local state instead of nullifying', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# Coder')
+    seedPersona('coder', '# Coder')
     await setState({ persona: 'coder', backend: 'claude' })
     await run(persona, ['use', 'coder', '--local', '--format', 'json'])
     let local = await readLocalState()
@@ -306,10 +498,35 @@ describe('rules commands', () => {
   beforeEach(setup)
   afterEach(teardown)
 
+  test('create creates a rule on server', async () => {
+    const { parsed } = await run(rules, ['create', 'security', '--format', 'json'])
+    expect(parsed.name).toBe('security')
+    expect(store.rules.has('security')).toBe(true)
+  })
+
+  test('create rejects duplicate', async () => {
+    seedRule('security', '# Security')
+    const { exitCode, parsed } = await run(rules, ['create', 'security', '--format', 'json'])
+    expect(exitCode).toBe(1)
+    expect(parsed.code).toBe('RULE_EXISTS')
+  })
+
+  test('show returns rule content', async () => {
+    seedRule('security', '# Security\n\nBe safe.')
+    const { parsed } = await run(rules, ['show', 'security', '--format', 'json'])
+    expect(parsed.name).toBe('security')
+    expect(parsed.content).toContain('Be safe')
+  })
+
+  test('show errors on missing rule', async () => {
+    const { exitCode, parsed } = await run(rules, ['show', 'ghost', '--format', 'json'])
+    expect(exitCode).toBe(1)
+    expect(parsed.code).toBe('RULE_NOT_FOUND')
+  })
+
   test('list returns available and active rules', async () => {
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
-    await mkdir(join(brainjarDir, 'rules', 'default'))
-    await writeFile(join(brainjarDir, 'rules', 'default', 'boundaries.md'), '# Boundaries')
+    seedRule('security', '# Security')
+    seedRule('default', '# Boundaries')
     await setState({ rules: ['security'], backend: 'claude' })
     const { parsed } = await run(rules, ['list', '--format', 'json'])
     expect(parsed.active).toEqual(['security'])
@@ -318,7 +535,7 @@ describe('rules commands', () => {
   })
 
   test('add activates a rule', async () => {
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
+    seedRule('security', '# Security')
     await setState({ backend: 'claude' })
     const { parsed } = await run(rules, ['add', 'security', '--local', '--format', 'json'])
     expect(parsed.activated).toBe('security')
@@ -331,16 +548,8 @@ describe('rules commands', () => {
     expect(parsed.code).toBe('RULE_NOT_FOUND')
   })
 
-  test('add activates a rule pack (directory)', async () => {
-    await mkdir(join(brainjarDir, 'rules', 'default'))
-    await writeFile(join(brainjarDir, 'rules', 'default', 'a.md'), '# A')
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(rules, ['add', 'default', '--local', '--format', 'json'])
-    expect(parsed.activated).toBe('default')
-  })
-
   test('remove deactivates a rule', async () => {
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
+    seedRule('security', '# Security')
     await setState({ rules: ['security'], backend: 'claude' })
     const { parsed } = await run(rules, ['remove', 'security', '--local', '--format', 'json'])
     expect(parsed.removed).toBe('security')
@@ -369,7 +578,6 @@ describe('status command', () => {
   })
 
   test('returns active layers with scope annotations', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
     await setState({ soul: 'warrior', persona: null, rules: ['security'], backend: 'claude' })
     const { parsed } = await run(status, ['--format', 'json'])
     expect(parsed.soul).toEqual({ value: 'warrior', scope: 'global' })
@@ -377,7 +585,6 @@ describe('status command', () => {
   })
 
   test('--global shows only global state', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
     await setState({ soul: 'warrior', backend: 'claude' })
     const { parsed } = await run(status, ['--global', '--format', 'json'])
     expect(parsed.soul).toBe('warrior')
@@ -391,8 +598,6 @@ describe('status command', () => {
   })
 
   test('env vars override effective state with env scope', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
-    await writeFile(join(brainjarDir, 'souls', 'paranoid.md'), '# Paranoid')
     await setState({ soul: 'warrior', backend: 'claude' })
     process.env.BRAINJAR_SOUL = 'paranoid'
     try {
@@ -404,7 +609,6 @@ describe('status command', () => {
   })
 
   test('env vars do not affect --global output', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
     await setState({ soul: 'warrior', backend: 'claude' })
     process.env.BRAINJAR_SOUL = 'paranoid'
     try {
@@ -416,7 +620,6 @@ describe('status command', () => {
   })
 
   test('env rules add shows +env scope', async () => {
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
     await setState({ rules: ['security'], backend: 'claude' })
     process.env.BRAINJAR_RULES_ADD = 'strict'
     try {
@@ -435,12 +638,10 @@ describe('init command', () => {
   afterEach(teardown)
 
   test('creates directory structure', async () => {
-    // Clear env vars that could leak from the user's active brainjar config
     for (const key of envKeys) {
       savedEnv[key] = process.env[key]
       delete process.env[key]
     }
-    // Use a fresh dir without pre-created subdirs
     brainjarDir = await mkdtemp(join(tmpdir(), 'brainjar-init-'))
     backendDir = await mkdtemp(join(tmpdir(), 'brainjar-backend-'))
     process.env.BRAINJAR_HOME = brainjarDir
@@ -452,16 +653,13 @@ describe('init command', () => {
     expect(parsed.created).toBe(brainjarDir)
     expect(parsed.directories).toContain('souls/')
 
-    // Verify directories exist
     await access(join(brainjarDir, 'souls'))
     await access(join(brainjarDir, 'personas'))
     await access(join(brainjarDir, 'rules'))
 
-    // Verify .gitignore
     const gitignore = await readFile(join(brainjarDir, '.gitignore'), 'utf-8')
     expect(gitignore).toContain('state.yaml')
 
-    // Verify state
     const state = await readState()
     expect(state.backend).toBe('claude')
   })
@@ -521,26 +719,17 @@ describe('brain commands', () => {
   afterEach(teardown)
 
   test('save snapshots current effective state', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
     await setState({ soul: 'craftsman', persona: 'reviewer', rules: ['default', 'security'], backend: 'claude' })
     const { parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(parsed.saved).toBe('review')
     expect(parsed.soul).toBe('craftsman')
     expect(parsed.persona).toBe('reviewer')
     expect(parsed.rules).toEqual(['default', 'security'])
-    // Verify file was written
-    const content = await readFile(join(brainjarDir, 'brains', 'review.yaml'), 'utf-8')
-    const yaml = parseYaml(content)
-    expect(yaml.soul).toBe('craftsman')
-    expect(yaml.persona).toBe('reviewer')
+    expect(store.brains.has('review')).toBe(true)
   })
 
   test('save rejects duplicate without --overwrite', async () => {
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: x\npersona: y\nrules: []\n')
-    await writeFile(join(brainjarDir, 'souls', 'x.md'), '# X')
-    await writeFile(join(brainjarDir, 'personas', 'y.md'), '# Y')
+    seedBrain('review', 'x', 'y')
     await setState({ soul: 'x', persona: 'y', rules: [], backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
@@ -548,9 +737,7 @@ describe('brain commands', () => {
   })
 
   test('save with --overwrite replaces existing', async () => {
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: old\npersona: old\nrules: []\n')
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
+    seedBrain('review', 'old', 'old')
     await setState({ soul: 'craftsman', persona: 'reviewer', rules: ['security'], backend: 'claude' })
     const { parsed } = await run(brain, ['save', 'review', '--overwrite', '--format', 'json'])
     expect(parsed.saved).toBe('review')
@@ -558,7 +745,6 @@ describe('brain commands', () => {
   })
 
   test('save errors when no active soul', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
     await setState({ persona: 'reviewer', backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
@@ -566,7 +752,6 @@ describe('brain commands', () => {
   })
 
   test('save errors when no active persona', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
     await setState({ soul: 'craftsman', backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
@@ -574,11 +759,9 @@ describe('brain commands', () => {
   })
 
   test('use activates brain — sets soul, persona, rules', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules:\n  - default\n')
-    await mkdir(join(brainjarDir, 'rules', 'default'))
-    await writeFile(join(brainjarDir, 'rules', 'default', 'a.md'), '# A')
+    seedSoul('craftsman', '# Craftsman')
+    seedPersona('reviewer', '# Reviewer')
+    seedBrain('review', 'craftsman', 'reviewer', ['default'])
     await setState({ backend: 'claude' })
     const { parsed } = await run(brain, ['use', 'review', '--local', '--format', 'json'])
     expect(parsed.activated).toBe('review')
@@ -588,10 +771,9 @@ describe('brain commands', () => {
   })
 
   test('use sets global state correctly', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules:\n  - security\n')
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
+    seedSoul('craftsman', '# Craftsman')
+    seedPersona('reviewer', '# Reviewer')
+    seedBrain('review', 'craftsman', 'reviewer', ['security'])
     await setState({ backend: 'claude' })
     await run(brain, ['use', 'review', '--format', 'json'])
     const state = await readState()
@@ -608,8 +790,8 @@ describe('brain commands', () => {
   })
 
   test('use errors when brain references missing soul', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
-    await writeFile(join(brainjarDir, 'brains', 'bad.yaml'), 'soul: ghost\npersona: reviewer\nrules: []\n')
+    seedPersona('reviewer', '# Reviewer')
+    seedBrain('bad', 'ghost', 'reviewer')
     await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['use', 'bad', '--format', 'json'])
     expect(exitCode).toBe(1)
@@ -617,8 +799,8 @@ describe('brain commands', () => {
   })
 
   test('use errors when brain references missing persona', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'brains', 'bad.yaml'), 'soul: craftsman\npersona: ghost\nrules: []\n')
+    seedSoul('craftsman', '# Craftsman')
+    seedBrain('bad', 'craftsman', 'ghost')
     await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['use', 'bad', '--format', 'json'])
     expect(exitCode).toBe(1)
@@ -626,8 +808,8 @@ describe('brain commands', () => {
   })
 
   test('list returns available brains', async () => {
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: x\npersona: y\nrules: []\n')
-    await writeFile(join(brainjarDir, 'brains', 'build.yaml'), 'soul: x\npersona: y\nrules: []\n')
+    seedBrain('review', 'x', 'y')
+    seedBrain('build', 'x', 'y')
     const { parsed } = await run(brain, ['list', '--format', 'json'])
     expect(parsed.brains).toContain('review')
     expect(parsed.brains).toContain('build')
@@ -639,7 +821,7 @@ describe('brain commands', () => {
   })
 
   test('show returns brain config', async () => {
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules:\n  - default\n  - security\n')
+    seedBrain('review', 'craftsman', 'reviewer', ['default', 'security'])
     const { parsed } = await run(brain, ['show', 'review', '--format', 'json'])
     expect(parsed.name).toBe('review')
     expect(parsed.soul).toBe('craftsman')
@@ -654,16 +836,10 @@ describe('brain commands', () => {
   })
 
   test('drop deletes a brain', async () => {
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: x\npersona: y\nrules: []\n')
+    seedBrain('review', 'x', 'y')
     const { parsed } = await run(brain, ['drop', 'review', '--format', 'json'])
     expect(parsed.dropped).toBe('review')
-    // Verify file is gone
-    try {
-      await access(join(brainjarDir, 'brains', 'review.yaml'))
-      throw new Error('Should have been deleted')
-    } catch (e) {
-      expect((e as NodeJS.ErrnoException).code).toBe('ENOENT')
-    }
+    expect(store.brains.has('review')).toBe(false)
   })
 
   test('drop errors on missing brain', async () => {
@@ -680,6 +856,7 @@ describe('brain commands', () => {
 })
 
 // ─── compose (brain-first) ─────────────────────────────────────────────────
+// Note: compose still uses filesystem — not converted until phase 4
 
 describe('compose command', () => {
   beforeEach(setup)
@@ -811,7 +988,6 @@ describe('shell command', () => {
     await setup()
     origShell = process.env.SHELL
     process.env.SHELL = '/usr/bin/true'
-    // Save and clear any BRAINJAR_* env vars that could interfere with sync()
     for (const key of BRAINJAR_KEYS) {
       savedBrainjarEnv[key] = process.env[key]
       delete process.env[key]
@@ -821,7 +997,6 @@ describe('shell command', () => {
   afterEach(async () => {
     if (origShell === undefined) delete process.env.SHELL
     else process.env.SHELL = origShell
-    // Restore saved BRAINJAR_* env vars
     for (const key of BRAINJAR_KEYS) {
       if (savedBrainjarEnv[key] === undefined) delete process.env[key]
       else process.env[key] = savedBrainjarEnv[key]

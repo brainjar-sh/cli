@@ -1,11 +1,10 @@
 import { Cli, z, Errors } from 'incur'
 
 const { IncurError } = Errors
-import { readdir, readFile, writeFile, access } from 'node:fs/promises'
-import { join, basename } from 'node:path'
-import { paths } from '../paths.js'
-import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, stripFrontmatter, normalizeSlug } from '../state.js'
-import { sync } from '../sync.js'
+import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug } from '../state.js'
+// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { getApi } from '../client.js'
+import type { ApiSoul, ApiSoulList } from '../api-types.js'
 
 export const soul = Cli.create('soul', {
   description: 'Manage soul — personality and values for the agent',
@@ -13,25 +12,26 @@ export const soul = Cli.create('soul', {
   .command('create', {
     description: 'Create a new soul',
     args: z.object({
-      name: z.string().describe('Soul name (will be used as filename)'),
+      name: z.string().describe('Soul name'),
     }),
     options: z.object({
       description: z.string().optional().describe('One-line description of the soul'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'soul name')
-      const dest = join(paths.souls, `${name}.md`)
+      const api = await getApi()
 
+      // Check if it already exists
       try {
-        await access(dest)
+        await api.get<ApiSoul>(`/api/v1/souls/${name}`)
         throw new IncurError({
           code: 'SOUL_EXISTS',
           message: `Soul "${name}" already exists.`,
-          hint: 'Choose a different name or edit the existing file.',
+          hint: 'Choose a different name or edit the existing soul.',
         })
       } catch (e) {
-        if (e instanceof IncurError) throw e
+        if (e instanceof IncurError && e.code === 'SOUL_EXISTS') throw e
+        if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
       }
 
       const lines: string[] = []
@@ -43,27 +43,26 @@ export const soul = Cli.create('soul', {
       }
 
       const content = lines.join('\n')
-      await writeFile(dest, content)
+      await api.put<ApiSoul>(`/api/v1/souls/${name}`, { content })
 
       if (c.agent || c.formatExplicit) {
-        return { created: dest, name, template: content }
+        return { created: name, name, template: content }
       }
 
       return {
-        created: dest,
+        created: name,
         name,
         template: `\n${content}`,
-        next: `Edit ${dest} to flesh out your soul, then run \`brainjar soul use ${name}\` to activate.`,
+        next: `Run \`brainjar soul show ${name}\` to view, then \`brainjar soul use ${name}\` to activate.`,
       }
     },
   })
   .command('list', {
     description: 'List available souls',
     async run() {
-      await requireBrainjarDir()
-      const entries = await readdir(paths.souls).catch(() => [])
-      const souls = entries.filter(f => f.endsWith('.md')).map(f => basename(f, '.md'))
-      return { souls }
+      const api = await getApi()
+      const result = await api.get<ApiSoulList>('/api/v1/souls')
+      return { souls: result.souls.map(s => s.slug) }
     },
   })
   .command('show', {
@@ -76,10 +75,11 @@ export const soul = Cli.create('soul', {
       short: z.boolean().default(false).describe('Print only the active soul name'),
     }),
     async run(c) {
-      await requireBrainjarDir()
+      const api = await getApi()
 
       if (c.options.short) {
         if (c.args.name) return c.args.name
+        await requireBrainjarDir()
         const global = await readState()
         const local = await readLocalState()
         const env = readEnvState()
@@ -87,56 +87,54 @@ export const soul = Cli.create('soul', {
         return effective.soul.value ?? 'none'
       }
 
-      // If a specific name was given, show that soul directly
       if (c.args.name) {
         const name = normalizeSlug(c.args.name, 'soul name')
         try {
-          const raw = await readFile(join(paths.souls, `${name}.md`), 'utf-8')
-          const content = stripFrontmatter(raw)
-          const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
-          return { name, title, content }
-        } catch {
-          throw new IncurError({
-            code: 'SOUL_NOT_FOUND',
-            message: `Soul "${name}" not found.`,
-            hint: 'Run `brainjar soul list` to see available souls.',
-          })
+          const soul = await api.get<ApiSoul>(`/api/v1/souls/${name}`)
+          return { name, title: soul.title, content: soul.content }
+        } catch (e) {
+          if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+            throw new IncurError({
+              code: 'SOUL_NOT_FOUND',
+              message: `Soul "${name}" not found.`,
+              hint: 'Run `brainjar soul list` to see available souls.',
+            })
+          }
+          throw e
         }
       }
 
       if (c.options.local) {
+        await requireBrainjarDir()
         const local = await readLocalState()
         if (!('soul' in local)) return { active: false, scope: 'local', note: 'No local soul override (cascades from global)' }
         if (local.soul === null) return { active: false, scope: 'local', name: null, note: 'Explicitly unset at local scope' }
         try {
-          const raw = await readFile(join(paths.souls, `${local.soul}.md`), 'utf-8')
-          const content = stripFrontmatter(raw)
-          const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
-          return { active: true, scope: 'local', name: local.soul, title, content }
+          const soul = await api.get<ApiSoul>(`/api/v1/souls/${local.soul}`)
+          return { active: true, scope: 'local', name: local.soul, title: soul.title, content: soul.content }
         } catch {
-          return { active: false, scope: 'local', name: local.soul, error: 'File not found' }
+          return { active: false, scope: 'local', name: local.soul, error: 'Not found on server' }
         }
       }
 
+      await requireBrainjarDir()
       const global = await readState()
       const local = await readLocalState()
       const env = readEnvState()
       const effective = mergeState(global, local, env)
       if (!effective.soul.value) return { active: false }
       try {
-        const raw = await readFile(join(paths.souls, `${effective.soul.value}.md`), 'utf-8')
-        const content = stripFrontmatter(raw)
-        const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
-        return { active: true, name: effective.soul.value, scope: effective.soul.scope, title, content }
+        const soul = await api.get<ApiSoul>(`/api/v1/souls/${effective.soul.value}`)
+        return { active: true, name: effective.soul.value, scope: effective.soul.scope, title: soul.title, content: soul.content }
       } catch {
-        return { active: false, name: effective.soul.value, error: 'File not found' }
+        return { active: false, name: effective.soul.value, error: 'Not found on server' }
       }
     },
   })
   .command('use', {
     description: 'Activate a soul',
     args: z.object({
-      name: z.string().describe('Soul name (filename without .md in ~/.brainjar/souls/)'),
+      name: z.string().describe('Soul name'),
     }),
     options: z.object({
       local: z.boolean().default(false).describe('Write to local .claude/CLAUDE.md instead of global'),
@@ -144,15 +142,20 @@ export const soul = Cli.create('soul', {
     async run(c) {
       await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'soul name')
-      const source = join(paths.souls, `${name}.md`)
+      const api = await getApi()
+
+      // Validate it exists on server
       try {
-        await readFile(source, 'utf-8')
-      } catch {
-        throw new IncurError({
-          code: 'SOUL_NOT_FOUND',
-          message: `Soul "${name}" not found.`,
-          hint: 'Run `brainjar soul list` to see available souls.',
-        })
+        await api.get<ApiSoul>(`/api/v1/souls/${name}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'SOUL_NOT_FOUND',
+            message: `Soul "${name}" not found.`,
+            hint: 'Run `brainjar soul list` to see available souls.',
+          })
+        }
+        throw e
       }
 
       if (c.options.local) {
@@ -160,14 +163,14 @@ export const soul = Cli.create('soul', {
           const local = await readLocalState()
           local.soul = name
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
           const state = await readState()
           state.soul = name
           await writeState(state)
-          await sync()
+          // sync() removed — phase 3
         })
       }
 
@@ -186,7 +189,7 @@ export const soul = Cli.create('soul', {
           const local = await readLocalState()
           delete local.soul
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
@@ -199,7 +202,7 @@ export const soul = Cli.create('soul', {
           }
           state.soul = null
           await writeState(state)
-          await sync()
+          // sync() removed — phase 3
         })
       }
       return { deactivated: true, local: c.options.local }

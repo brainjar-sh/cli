@@ -1,11 +1,10 @@
 import { Cli, z, Errors } from 'incur'
 
 const { IncurError } = Errors
-import { access, readFile, readdir, stat, writeFile, mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
-import { paths } from '../paths.js'
-import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug, listAvailableRules } from '../state.js'
-import { sync } from '../sync.js'
+import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug } from '../state.js'
+// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { getApi } from '../client.js'
+import type { ApiRule, ApiRuleList } from '../api-types.js'
 
 export const rules = Cli.create('rules', {
   description: 'Manage rules — behavioral constraints for the agent',
@@ -13,66 +12,27 @@ export const rules = Cli.create('rules', {
   .command('create', {
     description: 'Create a new rule',
     args: z.object({
-      name: z.string().describe('Rule name (will be used as filename)'),
+      name: z.string().describe('Rule name'),
     }),
     options: z.object({
       description: z.string().optional().describe('One-line description of the rule'),
-      pack: z.boolean().default(false).describe('Create as a rule pack (directory of .md files)'),
+      pack: z.boolean().default(false).describe('Create as a rule pack (multiple entries)'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'rule name')
+      const api = await getApi()
 
-      if (c.options.pack) {
-        const dirPath = join(paths.rules, name)
-        try {
-          await access(dirPath)
-          throw new IncurError({
-            code: 'RULE_EXISTS',
-            message: `Rule "${name}" already exists.`,
-            hint: 'Choose a different name or edit the existing files.',
-          })
-        } catch (e) {
-          if (e instanceof IncurError) throw e
-        }
-
-        await mkdir(dirPath, { recursive: true })
-
-        const scaffold = [
-          `# ${name}`,
-          '',
-          c.options.description ?? 'Describe what this rule enforces and why.',
-          '',
-          '## Constraints',
-          '- ',
-          '',
-        ].join('\n')
-
-        await writeFile(join(dirPath, `${name}.md`), scaffold)
-
-        if (c.agent || c.formatExplicit) {
-          return { created: dirPath, name, pack: true, template: scaffold }
-        }
-
-        return {
-          created: dirPath,
-          name,
-          pack: true,
-          template: `\n${scaffold}`,
-          next: `Edit ${join(dirPath, `${name}.md`)} to define your rule, then run \`brainjar rules add ${name}\` to activate.`,
-        }
-      }
-
-      const dest = join(paths.rules, `${name}.md`)
+      // Check if it already exists
       try {
-        await access(dest)
+        await api.get<ApiRule>(`/api/v1/rules/${name}`)
         throw new IncurError({
           code: 'RULE_EXISTS',
           message: `Rule "${name}" already exists.`,
-          hint: 'Choose a different name or edit the existing file.',
+          hint: 'Choose a different name or edit the existing rule.',
         })
       } catch (e) {
-        if (e instanceof IncurError) throw e
+        if (e instanceof IncurError && e.code === 'RULE_EXISTS') throw e
+        if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
       }
 
       const scaffold = [
@@ -85,17 +45,20 @@ export const rules = Cli.create('rules', {
         '',
       ].join('\n')
 
-      await writeFile(dest, scaffold)
+      await api.put<ApiRule>(`/api/v1/rules/${name}`, {
+        entries: [{ name: `${name}.md`, content: scaffold }],
+      })
 
       if (c.agent || c.formatExplicit) {
-        return { created: dest, name, template: scaffold }
+        return { created: name, name, pack: c.options.pack, template: scaffold }
       }
 
       return {
-        created: dest,
+        created: name,
         name,
+        pack: c.options.pack,
         template: `\n${scaffold}`,
-        next: `Edit ${dest} to define your rule, then run \`brainjar rules add ${name}\` to activate.`,
+        next: `Run \`brainjar rules show ${name}\` to view, then \`brainjar rules add ${name}\` to activate.`,
       }
     },
   })
@@ -105,24 +68,27 @@ export const rules = Cli.create('rules', {
       local: z.boolean().default(false).describe('Show local rules delta only'),
     }),
     async run(c) {
-      await requireBrainjarDir()
+      const api = await getApi()
+      const available = await api.get<ApiRuleList>('/api/v1/rules')
+      const availableSlugs = available.rules.map(r => r.slug)
 
       if (c.options.local) {
+        await requireBrainjarDir()
         const local = await readLocalState()
-        const available = await listAvailableRules()
         return {
           add: local.rules?.add ?? [],
           remove: local.rules?.remove ?? [],
-          available,
+          available: availableSlugs,
           scope: 'local',
         }
       }
 
-      const [global, local, available] = await Promise.all([readState(), readLocalState(), listAvailableRules()])
+      await requireBrainjarDir()
+      const [global, local] = await Promise.all([readState(), readLocalState()])
       const env = readEnvState()
       const effective = mergeState(global, local, env)
       const active = effective.rules.filter(r => !r.scope.startsWith('-')).map(r => r.value)
-      return { active, available, rules: effective.rules }
+      return { active, available: availableSlugs, rules: effective.rules }
     },
   })
   .command('show', {
@@ -131,73 +97,50 @@ export const rules = Cli.create('rules', {
       name: z.string().describe('Rule name to show'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'rule name')
-      const dirPath = join(paths.rules, name)
-      const filePath = join(paths.rules, `${name}.md`)
+      const api = await getApi()
 
-      // Try directory of .md files first
       try {
-        const s = await stat(dirPath)
-        if (s.isDirectory()) {
-          const files = await readdir(dirPath)
-          const mdFiles = files.filter(f => f.endsWith('.md')).sort()
-          const sections: string[] = []
-          for (const file of mdFiles) {
-            const content = await readFile(join(dirPath, file), 'utf-8')
-            sections.push(content.trim())
-          }
-          return { name, content: sections.join('\n\n') }
+        const rule = await api.get<ApiRule>(`/api/v1/rules/${name}`)
+        const content = rule.entries.map(e => e.content.trim()).join('\n\n')
+        return { name, content }
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'RULE_NOT_FOUND',
+            message: `Rule "${name}" not found.`,
+            hint: 'Run `brainjar rules list` to see available rules.',
+          })
         }
-      } catch {}
-
-      // Try single .md file
-      try {
-        const content = await readFile(filePath, 'utf-8')
-        return { name, content: content.trim() }
-      } catch {}
-
-      throw new IncurError({
-        code: 'RULE_NOT_FOUND',
-        message: `Rule "${name}" not found.`,
-        hint: 'Run `brainjar rules list` to see available rules.',
-      })
+        throw e
+      }
     },
   })
   .command('add', {
     description: 'Activate a rule or rule pack',
     args: z.object({
-      name: z.string().describe('Rule name or directory name in ~/.brainjar/rules/'),
+      name: z.string().describe('Rule name to activate'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Add rule as a local override (delta, not snapshot)'),
+      local: z.boolean().default(false).describe('Add rule as a local override'),
     }),
     async run(c) {
       await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'rule name')
-      // Verify it exists as a directory or .md file
-      const dirPath = join(paths.rules, name)
-      const filePath = join(paths.rules, `${name}.md`)
-      let found = false
+      const api = await getApi()
 
+      // Validate it exists on server
       try {
-        const s = await stat(dirPath)
-        if (s.isDirectory()) found = true
-      } catch {}
-
-      if (!found) {
-        try {
-          await readFile(filePath, 'utf-8')
-          found = true
-        } catch {}
-      }
-
-      if (!found) {
-        throw new IncurError({
-          code: 'RULE_NOT_FOUND',
-          message: `Rule "${name}" not found in ${paths.rules}`,
-          hint: 'Place .md files or directories in ~/.brainjar/rules/',
-        })
+        await api.get<ApiRule>(`/api/v1/rules/${name}`)
+      } catch (e) {
+        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
+          throw new IncurError({
+            code: 'RULE_NOT_FOUND',
+            message: `Rule "${name}" not found.`,
+            hint: 'Run `brainjar rules list` to see available rules.',
+          })
+        }
+        throw e
       }
 
       if (c.options.local) {
@@ -205,11 +148,10 @@ export const rules = Cli.create('rules', {
           const local = await readLocalState()
           const adds = local.rules?.add ?? []
           if (!adds.includes(name)) adds.push(name)
-          // Also remove from local removes if present
           const removes = (local.rules?.remove ?? []).filter(r => r !== name)
           local.rules = { add: adds, ...(removes.length ? { remove: removes } : {}) }
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
@@ -218,7 +160,7 @@ export const rules = Cli.create('rules', {
             state.rules.push(name)
             await writeState(state)
           }
-          await sync()
+          // sync() removed — phase 3
         })
       }
 
@@ -231,7 +173,7 @@ export const rules = Cli.create('rules', {
       name: z.string().describe('Rule name to remove'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Remove rule as a local override (delta, not snapshot)'),
+      local: z.boolean().default(false).describe('Remove rule as a local override'),
     }),
     async run(c) {
       await requireBrainjarDir()
@@ -242,11 +184,10 @@ export const rules = Cli.create('rules', {
           const local = await readLocalState()
           const removes = local.rules?.remove ?? []
           if (!removes.includes(name)) removes.push(name)
-          // Also remove from local adds if present
           const adds = (local.rules?.add ?? []).filter(r => r !== name)
           local.rules = { ...(adds.length ? { add: adds } : {}), remove: removes }
           await writeLocalState(local)
-          await sync({ local: true })
+          // sync() removed — phase 3
         })
       } else {
         await withStateLock(async () => {
@@ -260,7 +201,7 @@ export const rules = Cli.create('rules', {
           }
           state.rules = state.rules.filter(r => r !== name)
           await writeState(state)
-          await sync()
+          // sync() removed — phase 3
         })
       }
 
