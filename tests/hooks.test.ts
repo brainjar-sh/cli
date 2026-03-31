@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { installHooks, removeHooks, getHooksStatus } from './hooks.js'
+import { installHooks, removeHooks, getHooksStatus } from '../src/hooks.js'
 
 const TEST_HOME = join(import.meta.dir, '..', '.test-home-hooks')
 const SETTINGS_PATH = join(TEST_HOME, '.claude', 'settings.json')

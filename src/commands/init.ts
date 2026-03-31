@@ -3,8 +3,9 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getBrainjarDir, paths, type Backend } from '../paths.js'
 import { seedDefaultRule, seedDefaults, initObsidian } from '../seeds.js'
-import { readState, writeState, withStateLock } from '../state.js'
+import { putState } from '../state.js'
 import { sync } from '../sync.js'
+import { getApi } from '../client.js'
 
 export const init = Cli.create('init', {
   description: 'Bootstrap ~/.brainjar/ directory structure',
@@ -37,17 +38,17 @@ export const init = Cli.create('init', {
       await seedDefaults()
     }
 
-    await withStateLock(async () => {
-      const state = await readState()
-      state.backend = c.options.backend
-      if (c.options.default) {
-        state.soul = 'craftsman'
-        state.persona = 'engineer'
-        state.rules = ['default', 'git-discipline', 'security']
-      }
-      await writeState(state)
-      await sync(c.options.backend as Backend)
-    })
+    const api = await getApi()
+
+    if (c.options.default) {
+      await putState(api, {
+        soul_slug: 'craftsman',
+        persona_slug: 'engineer',
+        rule_slugs: ['default', 'git-discipline', 'security'],
+      })
+    }
+
+    await sync({ api, backend: c.options.backend as Backend })
 
     const result: Record<string, unknown> = {
       created: brainjarDir,

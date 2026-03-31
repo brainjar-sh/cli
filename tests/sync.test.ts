@@ -1,39 +1,110 @@
-import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, afterAll, beforeAll } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sync } from '../src/sync.js'
-import { writeState, writeLocalState } from '../src/state.js'
+import type { ApiEffectiveState, ApiScopedValue, ApiScopedRule } from '../src/api-types.js'
+
+// ─── Mock API server ────────────────────────────────────────────────────────
+
+interface MockState {
+  soul: ApiScopedValue
+  persona: ApiScopedValue
+  rules: ApiScopedRule[]
+}
+
+interface MockContent {
+  souls: Map<string, { slug: string; title: string | null; content: string }>
+  personas: Map<string, { slug: string; title: string | null; content: string; bundled_rules: string[] }>
+  rules: Map<string, { slug: string; entries: { name: string; content: string }[] }>
+}
+
+let mockServer: ReturnType<typeof Bun.serve>
+let mockServerUrl: string
+let mockState: MockState
+let mockContent: MockContent
+
+function resetMock() {
+  mockState = {
+    soul: { slug: null, scope: 'workspace' },
+    persona: { slug: null, scope: 'workspace' },
+    rules: [],
+  }
+  mockContent = {
+    souls: new Map(),
+    personas: new Map(),
+    rules: new Map(),
+  }
+}
+
+beforeAll(() => {
+  resetMock()
+  mockServer = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      const path = url.pathname
+
+      if (path === '/healthz') return Response.json({ status: 'ok' })
+
+      if (path === '/api/v1/state' && req.method === 'GET') {
+        return Response.json(mockState)
+      }
+
+      const soulMatch = path.match(/^\/api\/v1\/souls\/([^/]+)$/)
+      if (soulMatch && req.method === 'GET') {
+        const s = mockContent.souls.get(soulMatch[1])
+        if (!s) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+        return Response.json(s)
+      }
+
+      const personaMatch = path.match(/^\/api\/v1\/personas\/([^/]+)$/)
+      if (personaMatch && req.method === 'GET') {
+        const p = mockContent.personas.get(personaMatch[1])
+        if (!p) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+        return Response.json(p)
+      }
+
+      const ruleMatch = path.match(/^\/api\/v1\/rules\/([^/]+)$/)
+      if (ruleMatch && req.method === 'GET') {
+        const r = mockContent.rules.get(ruleMatch[1])
+        if (!r) return Response.json({ error: 'Not found', code: 'NOT_FOUND' }, { status: 404 })
+        return Response.json(r)
+      }
+
+      return Response.json({ error: 'Not found' }, { status: 404 })
+    },
+  })
+  mockServerUrl = `http://localhost:${mockServer.port}`
+})
+
+afterAll(() => {
+  mockServer?.stop()
+})
+
+// ─── Test helpers ───────────────────────────────────────────────────────────
 
 const originalBrainjarHome = process.env.BRAINJAR_HOME
-const originalLocalDir = process.env.BRAINJAR_LOCAL_DIR
 afterAll(() => {
   if (originalBrainjarHome) process.env.BRAINJAR_HOME = originalBrainjarHome
   else delete process.env.BRAINJAR_HOME
-  if (originalLocalDir) process.env.BRAINJAR_LOCAL_DIR = originalLocalDir
-  else delete process.env.BRAINJAR_LOCAL_DIR
 })
 
 let brainjarDir: string
 let backendDir: string
 let origCwd: string
 
-const envKeys = ['BRAINJAR_SOUL', 'BRAINJAR_PERSONA', 'BRAINJAR_RULES_ADD', 'BRAINJAR_RULES_REMOVE']
-const savedEnv: Record<string, string | undefined> = {}
-
 async function setup() {
-  for (const key of envKeys) {
-    savedEnv[key] = process.env[key]
-    delete process.env[key]
-  }
+  resetMock()
   brainjarDir = await mkdtemp(join(tmpdir(), 'brainjar-test-'))
   backendDir = await mkdtemp(join(tmpdir(), 'brainjar-backend-'))
   process.env.BRAINJAR_HOME = brainjarDir
-  process.env.BRAINJAR_LOCAL_DIR = join(backendDir, '.brainjar')
 
-  await mkdir(join(brainjarDir, 'souls'), { recursive: true })
-  await mkdir(join(brainjarDir, 'personas'), { recursive: true })
-  await mkdir(join(brainjarDir, 'rules'), { recursive: true })
+  // Write config pointing at mock server
+  await writeFile(
+    join(brainjarDir, 'config.yaml'),
+    `server:\n  url: ${mockServerUrl}\n  mode: remote\nworkspace: default\n`,
+  )
 
   origCwd = process.cwd()
   process.chdir(backendDir)
@@ -41,87 +112,69 @@ async function setup() {
 
 async function teardown() {
   process.chdir(origCwd)
-  for (const key of envKeys) {
-    if (savedEnv[key] !== undefined) process.env[key] = savedEnv[key]
-    else delete process.env[key]
-  }
   await rm(brainjarDir, { recursive: true, force: true })
   await rm(backendDir, { recursive: true, force: true })
 }
 
-async function writeSoul(name: string, content: string) {
-  await writeFile(join(brainjarDir, 'souls', `${name}.md`), content)
-}
-
-async function writePersona(name: string, content: string) {
-  await writeFile(join(brainjarDir, 'personas', `${name}.md`), content)
-}
-
-async function writeRulePack(name: string, files: Record<string, string>) {
-  const dir = join(brainjarDir, 'rules', name)
-  await mkdir(dir, { recursive: true })
-  for (const [file, content] of Object.entries(files)) {
-    await writeFile(join(dir, file), content)
-  }
-}
-
-async function writeRuleFile(name: string, content: string) {
-  await writeFile(join(brainjarDir, 'rules', `${name}.md`), content)
-}
-
-function setState(state: {
+function setMockState(opts: {
   backend?: string | null
   soul?: string | null
   persona?: string | null
   rules?: string[]
 }) {
-  return writeState({
-    backend: state.backend ?? null,
-    soul: state.soul ?? null,
-    persona: state.persona ?? null,
-    rules: state.rules ?? [],
-  })
+  mockState = {
+    soul: { slug: opts.soul ?? null, scope: 'workspace' },
+    persona: { slug: opts.persona ?? null, scope: 'workspace' },
+    rules: (opts.rules ?? []).map(slug => ({ slug, scope: 'workspace' })),
+  }
+}
+
+function addMockSoul(slug: string, content: string) {
+  const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
+  mockContent.souls.set(slug, { slug, title, content })
+}
+
+function addMockPersona(slug: string, content: string) {
+  const title = content.split('\n').find(l => l.startsWith('# '))?.replace('# ', '') ?? null
+  mockContent.personas.set(slug, { slug, title, content, bundled_rules: [] })
+}
+
+function addMockRule(slug: string, entries: { name: string; content: string }[]) {
+  mockContent.rules.set(slug, { slug, entries })
 }
 
 function readOutput() {
   return readFile(join(backendDir, '.claude', 'CLAUDE.md'), 'utf-8')
 }
 
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
 describe('sync — global mode', () => {
   beforeEach(setup)
   afterEach(teardown)
 
   test('generates config with soul (global)', async () => {
-    await writeSoul('straight-shooter', '# Straight Shooter\n\nDirect. No filler.')
-    await setState({ soul: 'straight-shooter', backend: 'claude' })
+    addMockSoul('straight-shooter', '# Straight Shooter\n\nDirect. No filler.')
+    setMockState({ soul: 'straight-shooter' })
 
-    // Global sync writes to HOME/.claude/ (BRAINJAR_TEST_HOME in tests)
     const result = await sync()
     expect(result.backend).toBe('claude')
-    expect(result.local).toBe(false)
+    expect(result.project).toBe(false)
     expect(result.written).toContain('CLAUDE.md')
   })
 
   test('generates config with all layers in correct order', async () => {
-    await writeSoul('warrior', '# Warrior\n\nBold and decisive.')
-    await writePersona('coder', '# Coder\n\nShip clean code.')
-    await writeRuleFile('security', '# Security\n\nNo secrets.')
-    await writeRulePack('default', { 'scope.md': '# Scope\n\nStay focused.' })
-    await setState({
+    addMockSoul('warrior', '# Warrior\n\nBold and decisive.')
+    addMockPersona('coder', '# Coder\n\nShip clean code.')
+    addMockRule('security', [{ name: 'security.md', content: '# Security\n\nNo secrets.' }])
+    addMockRule('default', [{ name: 'scope.md', content: '# Scope\n\nStay focused.' }])
+    setMockState({
       soul: 'warrior',
       persona: 'coder',
       rules: ['default', 'security'],
-      backend: 'claude',
     })
 
-    await sync({ local: true })
-    // Set up local state to override everything
-    await writeLocalState({
-      soul: 'warrior',
-      persona: 'coder',
-      rules: { add: ['default', 'security'] },
-    })
-    await sync({ local: true })
+    await sync({ project: true })
     const output = await readOutput()
 
     expect(output).toContain('## Soul')
@@ -137,29 +190,35 @@ describe('sync — global mode', () => {
   })
 
   test('warns on missing rule', async () => {
-    await setState({ rules: ['ghost-rule'], backend: 'claude' })
-    await writeLocalState({ rules: { add: ['ghost-rule'] } })
+    // Rule slug in state but not served by mock → fetch returns 404
+    setMockState({ rules: ['ghost-rule'] })
 
-    const result = await sync({ local: true })
+    const result = await sync({ project: true })
     expect(result.warnings).toBeDefined()
     expect(result.warnings!.some((w: string) => w.includes('ghost-rule'))).toBe(true)
   })
 
-  test('warns on empty rule directory', async () => {
-    await mkdir(join(brainjarDir, 'rules', 'empty-pack'), { recursive: true })
-    await setState({ rules: ['empty-pack'], backend: 'claude' })
-    await writeLocalState({})
+  test('warns on missing soul', async () => {
+    // Soul slug in state but not served → 404
+    setMockState({ soul: 'nonexistent' })
 
-    const result = await sync()
+    const result = await sync({ project: true })
     expect(result.warnings).toBeDefined()
-    expect(result.warnings!.some((w: string) => w.includes('empty-pack') && w.includes('no .md files'))).toBe(true)
+    expect(result.warnings!.some((w: string) => w.includes('nonexistent'))).toBe(true)
+  })
+
+  test('warns on missing persona', async () => {
+    setMockState({ persona: 'nonexistent' })
+
+    const result = await sync({ project: true })
+    expect(result.warnings).toBeDefined()
+    expect(result.warnings!.some((w: string) => w.includes('nonexistent'))).toBe(true)
   })
 
   test('empty state produces minimal config', async () => {
-    await setState({})
-    await writeLocalState({})
+    setMockState({})
 
-    await sync({ local: true })
+    await sync({ project: true })
     const output = await readOutput()
 
     expect(output).toContain('Managed by brainjar')
@@ -169,38 +228,21 @@ describe('sync — global mode', () => {
   })
 })
 
-describe('sync — local mode', () => {
+describe('sync — project mode', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  test('only writes overridden layers from local state', async () => {
-    await writeSoul('warrior', '# Warrior\n\nBold.')
-    await writePersona('coder', '# Coder\n\nShip it.')
-    await writeRuleFile('security', '# Security\n\nNo secrets.')
-    await setState({
-      soul: 'warrior',
-      persona: 'coder',
-      rules: ['security'],
-      backend: 'claude',
-    })
-
-    // Only persona overridden in local state
-    await writeLocalState({ persona: 'coder' })
-    await sync({ local: true })
-    const output = await readOutput()
-
-    expect(output).toContain('## Persona')
-    expect(output).toContain('# Coder')
-    expect(output).not.toContain('## Soul')
-    expect(output).not.toContain('# Security')
+  test('project sync result has project: true', async () => {
+    setMockState({})
+    const result = await sync({ project: true })
+    expect(result.project).toBe(true)
   })
 
-  test('local soul override writes soul', async () => {
-    await writeSoul('focused', '# Focused\n\nDeep concentration.')
-    await setState({ soul: 'warrior', backend: 'claude' })
+  test('project sync writes soul from server', async () => {
+    addMockSoul('focused', '# Focused\n\nDeep concentration.')
+    setMockState({ soul: 'focused' })
 
-    await writeLocalState({ soul: 'focused' })
-    await sync({ local: true })
+    await sync({ project: true })
     const output = await readOutput()
 
     expect(output).toContain('## Soul')
@@ -208,100 +250,46 @@ describe('sync — local mode', () => {
     expect(output).toContain('Deep concentration.')
   })
 
-  test('local null soul does not write soul section', async () => {
-    await writeSoul('warrior', '# Warrior')
-    await setState({ soul: 'warrior', backend: 'claude' })
+  test('project sync writes persona from server', async () => {
+    addMockPersona('coder', '# Coder\n\nShip it.')
+    setMockState({ persona: 'coder' })
 
-    await writeLocalState({ soul: null })
-    await sync({ local: true })
+    await sync({ project: true })
+    const output = await readOutput()
+
+    expect(output).toContain('## Persona')
+    expect(output).toContain('# Coder')
+  })
+
+  test('project sync writes rules from server', async () => {
+    addMockRule('security', [{ name: 'security.md', content: '# Security\n\nNo secrets.' }])
+    addMockRule('testing', [{ name: 'testing.md', content: '# Testing\n\nTest everything.' }])
+    setMockState({ rules: ['security', 'testing'] })
+
+    await sync({ project: true })
+    const output = await readOutput()
+
+    expect(output).toContain('# Security')
+    expect(output).toContain('# Testing')
+  })
+
+  test('null soul in state does not write soul section', async () => {
+    setMockState({ soul: null })
+
+    await sync({ project: true })
     const output = await readOutput()
 
     expect(output).not.toContain('## Soul')
   })
 
-  test('local rules delta inlines effective rules', async () => {
-    await writeRuleFile('security', '# Security\n\nNo secrets.')
-    await writeRuleFile('testing', '# Testing\n\nTest everything.')
-    await writeRuleFile('strict', '# Strict\n\nBe strict.')
-    await setState({ rules: ['security', 'testing'], backend: 'claude' })
+  test('project sync with empty state produces minimal config', async () => {
+    setMockState({})
 
-    // Local adds 'strict', removes 'testing'
-    await writeLocalState({ rules: { add: ['strict'], remove: ['testing'] } })
-    await sync({ local: true })
-    const output = await readOutput()
-
-    expect(output).toContain('# Security')
-    expect(output).toContain('# Strict')
-    expect(output).not.toContain('# Testing')
-  })
-
-  test('local sync with no local state file produces minimal config', async () => {
-    await setState({ soul: 'warrior', backend: 'claude' })
-    // No writeLocalState — file doesn't exist
-
-    await sync({ local: true })
+    await sync({ project: true })
     const output = await readOutput()
 
     expect(output).toContain('Managed by brainjar')
     expect(output).not.toContain('## Soul')
-  })
-
-  test('local sync result has local: true', async () => {
-    await setState({})
-    const result = await sync({ local: true })
-    expect(result.local).toBe(true)
-  })
-
-  test('env-scoped rule removal is respected in local sync', async () => {
-    await writeRuleFile('security', '# Security\n\nNo secrets.')
-    await writeRuleFile('testing', '# Testing\n\nTest everything.')
-    await setState({ rules: ['security', 'testing'], backend: 'claude' })
-
-    // Local state has both rules active
-    await writeLocalState({ rules: { add: ['security', 'testing'] } })
-
-    // Env removes 'testing'
-    process.env.BRAINJAR_RULES_REMOVE = 'testing'
-    try {
-      await sync({ local: true })
-      const output = await readOutput()
-      expect(output).toContain('# Security')
-      expect(output).not.toContain('# Testing')
-    } finally {
-      delete process.env.BRAINJAR_RULES_REMOVE
-    }
-  })
-
-  test('env overrides take precedence over local state in local sync', async () => {
-    await writeSoul('warrior', '# Warrior\n\nBold.')
-    await writeSoul('diplomat', '# Diplomat\n\nCalm and measured.')
-    await writePersona('coder', '# Coder\n\nShip it.')
-    await writePersona('writer', '# Writer\n\nCraft words.')
-    await setState({ soul: 'warrior', persona: 'coder', backend: 'claude' })
-
-    // Local state overrides persona to 'coder'
-    await writeLocalState({ soul: 'warrior', persona: 'coder' })
-    await sync({ local: true })
-    const before = await readOutput()
-    expect(before).toContain('# Warrior')
-    expect(before).toContain('# Coder')
-
-    // Now set env overrides — should win over local state
-    process.env.BRAINJAR_SOUL = 'diplomat'
-    process.env.BRAINJAR_PERSONA = 'writer'
-    try {
-      await sync({ local: true })
-      const after = await readOutput()
-      expect(after).toContain('# Diplomat')
-      expect(after).toContain('Calm and measured.')
-      expect(after).toContain('# Writer')
-      expect(after).toContain('Craft words.')
-      expect(after).not.toContain('# Warrior')
-      expect(after).not.toContain('# Coder')
-    } finally {
-      delete process.env.BRAINJAR_SOUL
-      delete process.env.BRAINJAR_PERSONA
-    }
   })
 })
 
@@ -310,19 +298,18 @@ describe('sync — marker-based section management', () => {
   afterEach(teardown)
 
   test('preserves user content after brainjar section', async () => {
-    await writeSoul('v1', '# V1\n\nFirst version.')
-    await setState({ soul: 'v1', backend: 'claude' })
-    await writeLocalState({ soul: 'v1' })
+    addMockSoul('v1', '# V1\n\nFirst version.')
+    setMockState({ soul: 'v1' })
 
-    await sync({ local: true })
+    await sync({ project: true })
 
     const claudeDir = join(backendDir, '.claude')
     const output1 = await readOutput()
     await writeFile(join(claudeDir, 'CLAUDE.md'), output1 + '\n\n## My Custom Rules\n\nAlways use bun.')
 
-    await writeSoul('v2', '# V2\n\nSecond version.')
-    await writeLocalState({ soul: 'v2' })
-    await sync({ local: true })
+    addMockSoul('v2', '# V2\n\nSecond version.')
+    setMockState({ soul: 'v2' })
+    await sync({ project: true })
 
     const output2 = await readOutput()
     expect(output2).toContain('# V2')
@@ -339,10 +326,9 @@ describe('sync — marker-based section management', () => {
     await writeFile(join(claudeDir, 'CLAUDE.md'),
       '## Project Notes\n\nImportant context.\n\n<!-- brainjar:start -->\nold stuff\n<!-- brainjar:end -->')
 
-    await writeSoul('fresh', '# Fresh\n\nNew soul.')
-    await setState({ soul: 'fresh', backend: 'claude' })
-    await writeLocalState({ soul: 'fresh' })
-    await sync({ local: true })
+    addMockSoul('fresh', '# Fresh\n\nNew soul.')
+    setMockState({ soul: 'fresh' })
+    await sync({ project: true })
 
     const output = await readOutput()
     expect(output).toContain('## Project Notes')
@@ -356,10 +342,9 @@ describe('sync — marker-based section management', () => {
     await mkdir(claudeDir, { recursive: true })
     await writeFile(join(claudeDir, 'CLAUDE.md'), '## Existing Config\n\nUser wrote this.')
 
-    await writeSoul('new', '# New\n\nBrand new.')
-    await setState({ soul: 'new', backend: 'claude' })
-    await writeLocalState({ soul: 'new' })
-    await sync({ local: true })
+    addMockSoul('new', '# New\n\nBrand new.')
+    setMockState({ soul: 'new' })
+    await sync({ project: true })
 
     const output = await readOutput()
     expect(output).toContain('<!-- brainjar:start -->')
@@ -374,53 +359,11 @@ describe('sync — marker-based section management', () => {
   })
 
   test('output contains markers', async () => {
-    await setState({})
-    await sync({ local: true })
+    setMockState({})
+    await sync({ project: true })
     const output = await readOutput()
     expect(output).toContain('<!-- brainjar:start -->')
     expect(output).toContain('<!-- brainjar:end -->')
-  })
-})
-
-describe('sync — active layer failures', () => {
-  beforeEach(setup)
-  afterEach(teardown)
-
-  test('throws when active soul file is missing', async () => {
-    await setState({ backend: 'claude' })
-    await writeLocalState({ soul: 'nonexistent' })
-    await expect(sync({ local: true })).rejects.toThrow()
-  })
-
-  test('throws when active persona file is missing', async () => {
-    await setState({ backend: 'claude' })
-    await writeLocalState({ persona: 'nonexistent' })
-    await expect(sync({ local: true })).rejects.toThrow()
-  })
-})
-
-describe('sync — path traversal defense', () => {
-  beforeEach(setup)
-  afterEach(teardown)
-
-  test('skips rules with invalid names and warns', async () => {
-    await writeRuleFile('legit', '# Legit rule')
-    await setState({ backend: 'claude', rules: ['legit'] })
-    // Local state adds the traversal attempts + a legit rule
-    await writeLocalState({ rules: { add: ['legit'] } })
-
-    // Write raw YAML to inject bad rules (bypass writeLocalState validation)
-    await writeFile(
-      join(backendDir, '.brainjar', 'state.yaml'),
-      'rules:\n  add:\n    - legit\n    - "../../../etc/passwd"\n    - "a/b"\n'
-    )
-
-    const result = await sync({ local: true })
-
-    const output = await readOutput()
-    expect(output).toContain('# Legit rule')
-    expect(output).not.toContain('passwd')
-    // readLocalState filters invalid slugs, so ../../../etc/passwd is already stripped
   })
 })
 
@@ -429,13 +372,13 @@ describe('sync — backup behavior', () => {
   afterEach(teardown)
 
   test('backs up existing non-brainjar config', async () => {
-    await setState({})
+    setMockState({})
 
     const claudeDir = join(backendDir, '.claude')
     await mkdir(claudeDir, { recursive: true })
     await writeFile(join(claudeDir, 'CLAUDE.md'), '# My original config\n\nDo not lose this.')
 
-    await sync({ local: true })
+    await sync({ project: true })
 
     const backup = await readFile(join(claudeDir, 'CLAUDE.md.pre-brainjar'), 'utf-8')
     expect(backup).toContain('My original config')
@@ -446,16 +389,15 @@ describe('sync — backup behavior', () => {
   })
 
   test('does not re-backup brainjar-managed config', async () => {
-    await setState({})
-    await writeSoul('v1', '# V1 Soul')
+    addMockSoul('v1', '# V1 Soul')
+    setMockState({ soul: 'v1' })
 
     const claudeDir = join(backendDir, '.claude')
     await mkdir(claudeDir, { recursive: true })
     await writeFile(join(claudeDir, 'CLAUDE.md'), '<!-- brainjar:start -->\n# Managed by brainjar\n\nOld managed content.\n<!-- brainjar:end -->')
     await writeFile(join(claudeDir, 'CLAUDE.md.pre-brainjar'), '# Original user config')
 
-    await writeLocalState({ soul: 'v1' })
-    await sync({ local: true })
+    await sync({ project: true })
 
     const backup = await readFile(join(claudeDir, 'CLAUDE.md.pre-brainjar'), 'utf-8')
     expect(backup).toContain('Original user config')

@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { readConfig, writeConfig, getConfigPath } from './config.js'
+import { readConfig, writeConfig, getConfigPath } from '../src/config.js'
 
 const TEST_HOME = join(import.meta.dir, '..', '.test-home-config')
 

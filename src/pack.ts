@@ -1,11 +1,14 @@
-import { readFile, readdir, writeFile, access, mkdir, cp, stat } from 'node:fs/promises'
-import { join, dirname, basename } from 'node:path'
+import { readFile, readdir, writeFile, access, mkdir, stat } from 'node:fs/promises'
+import { join, dirname } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { Errors } from 'incur'
-import { paths } from './paths.js'
-import { normalizeSlug, requireBrainjarDir, readState, writeState, withStateLock } from './state.js'
-import { readBrain, type BrainConfig } from './brain.js'
+import { normalizeSlug, putState } from './state.js'
 import { sync } from './sync.js'
+import { getApi } from './client.js'
+import type {
+  ApiBrain, ApiSoul, ApiPersona, ApiRule,
+  ContentBundle, BundleRule, ApiImportResult,
+} from './api-types.js'
 
 const { IncurError } = Errors
 
@@ -24,15 +27,6 @@ export interface PackManifest {
   }
 }
 
-interface PackFile {
-  /** Relative path within the pack directory (e.g. "souls/craftsman.md") */
-  rel: string
-  /** Absolute source path in ~/.brainjar/ */
-  src: string
-  /** Whether this is a directory (rule pack) */
-  isDir: boolean
-}
-
 export interface ExportOptions {
   out?: string
   name?: string
@@ -49,100 +43,23 @@ export interface ExportResult {
 }
 
 export interface ImportOptions {
-  force?: boolean
-  merge?: boolean
   activate?: boolean
-}
-
-interface Conflict {
-  rel: string
-  target: string
 }
 
 export interface ImportResult {
   imported: string
   from: string
   brain: string
-  written: string[]
-  skipped: string[]
-  overwritten: string[]
+  counts: { souls: number; personas: number; rules: number; brains: number }
   activated: boolean
   warnings: string[]
 }
 
-/** Collect all files referenced by a brain config. */
-async function collectFiles(brainName: string, config: BrainConfig): Promise<{ files: PackFile[]; warnings: string[] }> {
-  const files: PackFile[] = []
-  const warnings: string[] = []
-
-  // Brain YAML
-  files.push({
-    rel: `brains/${brainName}.yaml`,
-    src: join(paths.brains, `${brainName}.yaml`),
-    isDir: false,
-  })
-
-  // Soul
-  const soulPath = join(paths.souls, `${config.soul}.md`)
-  try {
-    await access(soulPath)
-    files.push({ rel: `souls/${config.soul}.md`, src: soulPath, isDir: false })
-  } catch {
-    throw new IncurError({
-      code: 'PACK_MISSING_SOUL',
-      message: `Brain "${brainName}" references soul "${config.soul}" which does not exist.`,
-    })
-  }
-
-  // Persona
-  const personaPath = join(paths.personas, `${config.persona}.md`)
-  try {
-    await access(personaPath)
-    files.push({ rel: `personas/${config.persona}.md`, src: personaPath, isDir: false })
-  } catch {
-    throw new IncurError({
-      code: 'PACK_MISSING_PERSONA',
-      message: `Brain "${brainName}" references persona "${config.persona}" which does not exist.`,
-    })
-  }
-
-  // Rules — soft failure
-  for (const rule of config.rules) {
-    const dirPath = join(paths.rules, rule)
-    const filePath = join(paths.rules, `${rule}.md`)
-
-    try {
-      const s = await stat(dirPath)
-      if (s.isDirectory()) {
-        const entries = await readdir(dirPath)
-        const mdFiles = entries.filter(f => f.endsWith('.md'))
-        if (mdFiles.length === 0) {
-          warnings.push(`Rule "${rule}" directory exists but contains no .md files — skipped.`)
-          continue
-        }
-        files.push({ rel: `rules/${rule}`, src: dirPath, isDir: true })
-        continue
-      }
-    } catch {}
-
-    try {
-      await access(filePath)
-      files.push({ rel: `rules/${rule}.md`, src: filePath, isDir: false })
-      continue
-    } catch {}
-
-    warnings.push(`Rule "${rule}" not found — skipped.`)
-  }
-
-  return { files, warnings }
-}
-
-/** Export a brain as a pack directory. */
+/** Export a brain as a pack directory. Content fetched from server. */
 export async function exportPack(brainName: string, options: ExportOptions = {}): Promise<ExportResult> {
-  await requireBrainjarDir()
-
   const slug = normalizeSlug(brainName, 'brain name')
-  const config = await readBrain(slug)
+  const api = await getApi()
+  const brain = await api.get<ApiBrain>(`/api/v1/brains/${slug}`)
   const packName = options.name ? normalizeSlug(options.name, 'pack name') : slug
   const version = options.version ?? '0.1.0'
 
@@ -152,13 +69,6 @@ export async function exportPack(brainName: string, options: ExportOptions = {})
       message: `Invalid version "${version}". Expected semver (e.g., 0.1.0).`,
     })
   }
-
-  const { files, warnings } = await collectFiles(slug, config)
-
-  // Determine which rules actually made it into the pack
-  const exportedRules = files
-    .filter(f => f.rel.startsWith('rules/'))
-    .map(f => f.isDir ? basename(f.rel) : basename(f.rel, '.md'))
 
   const parentDir = options.out ?? process.cwd()
   const packDir = join(parentDir, packName)
@@ -174,32 +84,72 @@ export async function exportPack(brainName: string, options: ExportOptions = {})
     if (e instanceof IncurError) throw e
   }
 
-  // Create pack directory structure
-  await mkdir(packDir, { recursive: true })
+  const warnings: string[] = []
 
-  for (const file of files) {
-    const dest = join(packDir, file.rel)
-    await mkdir(dirname(dest), { recursive: true })
-    if (file.isDir) {
-      await cp(file.src, dest, { recursive: true })
-    } else {
-      await cp(file.src, dest)
+  // Fetch soul
+  const soul = await api.get<ApiSoul>(`/api/v1/souls/${brain.soul_slug}`)
+
+  // Fetch persona
+  const persona = await api.get<ApiPersona>(`/api/v1/personas/${brain.persona_slug}`)
+
+  // Fetch rules (soft failure)
+  const fetchedRules: Array<{ slug: string; rule: ApiRule }> = []
+  for (const ruleSlug of brain.rule_slugs) {
+    try {
+      const rule = await api.get<ApiRule>(`/api/v1/rules/${ruleSlug}`)
+      fetchedRules.push({ slug: ruleSlug, rule })
+    } catch {
+      warnings.push(`Rule "${ruleSlug}" not found — skipped.`)
     }
   }
 
-  // Write manifest
+  // Write pack directory
+  await mkdir(packDir, { recursive: true })
+
+  // Brain YAML
+  await mkdir(join(packDir, 'brains'), { recursive: true })
+  await writeFile(join(packDir, 'brains', `${slug}.yaml`), stringifyYaml({
+    soul: brain.soul_slug,
+    persona: brain.persona_slug,
+    rules: brain.rule_slugs,
+  }))
+
+  // Soul
+  await mkdir(join(packDir, 'souls'), { recursive: true })
+  await writeFile(join(packDir, 'souls', `${brain.soul_slug}.md`), soul.content)
+
+  // Persona
+  await mkdir(join(packDir, 'personas'), { recursive: true })
+  await writeFile(join(packDir, 'personas', `${brain.persona_slug}.md`), persona.content)
+
+  // Rules
+  for (const { slug: ruleSlug, rule } of fetchedRules) {
+    if (rule.entries.length === 1) {
+      await mkdir(join(packDir, 'rules'), { recursive: true })
+      await writeFile(join(packDir, 'rules', `${ruleSlug}.md`), rule.entries[0].content)
+    } else {
+      const ruleDir = join(packDir, 'rules', ruleSlug)
+      await mkdir(ruleDir, { recursive: true })
+      for (const entry of rule.entries) {
+        await writeFile(join(ruleDir, entry.name), entry.content)
+      }
+    }
+  }
+
+  const exportedRules = fetchedRules.map(r => r.slug)
+
+  // Manifest
   const manifest: PackManifest = {
     name: packName,
     version,
     ...(options.author ? { author: options.author } : {}),
     brain: slug,
     contents: {
-      soul: config.soul,
-      persona: config.persona,
+      soul: brain.soul_slug,
+      persona: brain.persona_slug,
       rules: exportedRules,
     },
   }
-
   await writeFile(join(packDir, 'pack.yaml'), stringifyYaml(manifest))
 
   return {
@@ -314,23 +264,21 @@ export async function readManifest(packDir: string): Promise<PackManifest> {
   }
 }
 
-/** Validate that all files declared in the manifest exist in the pack directory. */
-async function validatePackFiles(packDir: string, manifest: PackManifest): Promise<void> {
-  // Brain YAML
-  const brainFile = join(packDir, 'brains', `${manifest.brain}.yaml`)
-  try {
-    await access(brainFile)
-  } catch {
-    throw new IncurError({
-      code: 'PACK_MISSING_FILE',
-      message: `Pack declares brain "${manifest.brain}" but brains/${manifest.brain}.yaml is missing.`,
-    })
+/** Read pack directory and build a ContentBundle for server import. */
+async function buildBundle(packDir: string, manifest: PackManifest): Promise<ContentBundle> {
+  const bundle: ContentBundle = {
+    souls: {},
+    personas: {},
+    rules: {},
+    brains: {},
   }
 
   // Soul
-  const soulFile = join(packDir, 'souls', `${manifest.contents.soul}.md`)
+  const soulPath = join(packDir, 'souls', `${manifest.contents.soul}.md`)
   try {
-    await access(soulFile)
+    bundle.souls![manifest.contents.soul] = {
+      content: await readFile(soulPath, 'utf-8'),
+    }
   } catch {
     throw new IncurError({
       code: 'PACK_MISSING_FILE',
@@ -339,9 +287,13 @@ async function validatePackFiles(packDir: string, manifest: PackManifest): Promi
   }
 
   // Persona
-  const personaFile = join(packDir, 'personas', `${manifest.contents.persona}.md`)
+  const personaPath = join(packDir, 'personas', `${manifest.contents.persona}.md`)
   try {
-    await access(personaFile)
+    const content = await readFile(personaPath, 'utf-8')
+    bundle.personas![manifest.contents.persona] = {
+      content,
+      bundled_rules: manifest.contents.rules,
+    }
   } catch {
     throw new IncurError({
       code: 'PACK_MISSING_FILE',
@@ -350,19 +302,34 @@ async function validatePackFiles(packDir: string, manifest: PackManifest): Promi
   }
 
   // Rules
-  for (const rule of manifest.contents.rules) {
-    const dirPath = join(packDir, 'rules', rule)
-    const filePath = join(packDir, 'rules', `${rule}.md`)
+  for (const ruleSlug of manifest.contents.rules) {
+    const dirPath = join(packDir, 'rules', ruleSlug)
+    const filePath = join(packDir, 'rules', `${ruleSlug}.md`)
 
     let found = false
+
+    // Try directory (multi-entry rule)
     try {
       const s = await stat(dirPath)
-      if (s.isDirectory()) found = true
+      if (s.isDirectory()) {
+        const entries = await readdir(dirPath)
+        const mdFiles = entries.filter(f => f.endsWith('.md')).sort()
+        const ruleEntries = await Promise.all(
+          mdFiles.map(async (file, i) => ({
+            sort_key: i,
+            content: await readFile(join(dirPath, file), 'utf-8'),
+          }))
+        )
+        bundle.rules![ruleSlug] = { entries: ruleEntries }
+        found = true
+      }
     } catch {}
 
+    // Try single file
     if (!found) {
       try {
-        await access(filePath)
+        const content = await readFile(filePath, 'utf-8')
+        bundle.rules![ruleSlug] = { entries: [{ sort_key: 0, content }] }
         found = true
       } catch {}
     }
@@ -370,128 +337,34 @@ async function validatePackFiles(packDir: string, manifest: PackManifest): Promi
     if (!found) {
       throw new IncurError({
         code: 'PACK_MISSING_FILE',
-        message: `Pack declares rule "${rule}" but neither rules/${rule}/ nor rules/${rule}.md exists.`,
+        message: `Pack declares rule "${ruleSlug}" but neither rules/${ruleSlug}/ nor rules/${ruleSlug}.md exists.`,
       })
     }
   }
-}
-
-/** Collect all importable files from a validated pack. Returns relative paths. */
-async function collectImportFiles(packDir: string, manifest: PackManifest): Promise<PackFile[]> {
-  const files: PackFile[] = []
 
   // Brain
-  files.push({
-    rel: `brains/${manifest.brain}.yaml`,
-    src: join(packDir, 'brains', `${manifest.brain}.yaml`),
-    isDir: false,
-  })
-
-  // Soul
-  files.push({
-    rel: `souls/${manifest.contents.soul}.md`,
-    src: join(packDir, 'souls', `${manifest.contents.soul}.md`),
-    isDir: false,
-  })
-
-  // Persona
-  files.push({
-    rel: `personas/${manifest.contents.persona}.md`,
-    src: join(packDir, 'personas', `${manifest.contents.persona}.md`),
-    isDir: false,
-  })
-
-  // Rules
-  for (const rule of manifest.contents.rules) {
-    const dirPath = join(packDir, 'rules', rule)
-    try {
-      const s = await stat(dirPath)
-      if (s.isDirectory()) {
-        files.push({ rel: `rules/${rule}`, src: dirPath, isDir: true })
-        continue
-      }
-    } catch {}
-
-    files.push({ rel: `rules/${rule}.md`, src: join(packDir, 'rules', `${rule}.md`), isDir: false })
-  }
-
-  return files
-}
-
-/** Compare file content to detect conflicts. For directories, compares each .md file. */
-async function detectConflicts(files: PackFile[]): Promise<{ conflicts: Conflict[]; skippedRels: Set<string>; skippedLabels: string[] }> {
-  const conflicts: Conflict[] = []
-  const skippedRels = new Set<string>()
-  const skippedLabels: string[] = []
-
-  for (const file of files) {
-    const target = join(paths.root, file.rel)
-
-    if (file.isDir) {
-      const srcEntries = await readdir(file.src)
-      for (const entry of srcEntries.filter(f => f.endsWith('.md'))) {
-        const rel = `${file.rel}/${entry}`
-        const srcContent = await readFile(join(file.src, entry), 'utf-8')
-        const targetFile = join(target, entry)
-        try {
-          const targetContent = await readFile(targetFile, 'utf-8')
-          if (srcContent === targetContent) {
-            skippedRels.add(rel)
-            skippedLabels.push(`${rel} (identical)`)
-          } else {
-            conflicts.push({ rel, target: targetFile })
-          }
-        } catch {
-          // Doesn't exist — will be copied
-        }
-      }
-    } else {
-      try {
-        const srcContent = await readFile(file.src, 'utf-8')
-        const targetContent = await readFile(target, 'utf-8')
-        if (srcContent === targetContent) {
-          skippedRels.add(file.rel)
-          skippedLabels.push(`${file.rel} (identical)`)
-        } else {
-          conflicts.push({ rel: file.rel, target })
-        }
-      } catch {
-        // Doesn't exist — will be copied
-      }
+  const brainPath = join(packDir, 'brains', `${manifest.brain}.yaml`)
+  try {
+    const raw = await readFile(brainPath, 'utf-8')
+    const parsed = parseYaml(raw) as Record<string, unknown>
+    bundle.brains![manifest.brain] = {
+      soul_slug: String(parsed.soul ?? ''),
+      persona_slug: String(parsed.persona ?? ''),
+      rule_slugs: Array.isArray(parsed.rules) ? parsed.rules.map(String) : [],
     }
-  }
-
-  return { conflicts, skippedRels, skippedLabels }
-}
-
-/** Generate a non-conflicting merge name. */
-async function findMergeName(basePath: string, slug: string, packName: string, ext: string): Promise<string> {
-  let candidate = `${slug}-from-${packName}`
-  let suffix = 2
-
-  while (true) {
-    const candidatePath = join(basePath, `${candidate}${ext}`)
-    try {
-      await access(candidatePath)
-      candidate = `${slug}-from-${packName}-${suffix}`
-      suffix++
-    } catch {
-      return candidate
-    }
-  }
-}
-
-/** Import a pack directory into ~/.brainjar/. */
-export async function importPack(packDir: string, options: ImportOptions = {}): Promise<ImportResult> {
-  await requireBrainjarDir()
-
-  if (options.force && options.merge) {
+  } catch (e) {
+    if (e instanceof IncurError) throw e
     throw new IncurError({
-      code: 'PACK_INVALID_OPTIONS',
-      message: '--force and --merge are mutually exclusive.',
+      code: 'PACK_MISSING_FILE',
+      message: `Pack declares brain "${manifest.brain}" but brains/${manifest.brain}.yaml is missing.`,
     })
   }
 
+  return bundle
+}
+
+/** Import a pack directory into the server via POST /api/v1/import. */
+export async function importPack(packDir: string, options: ImportOptions = {}): Promise<ImportResult> {
   // Validate path
   try {
     const s = await stat(packDir)
@@ -510,151 +383,21 @@ export async function importPack(packDir: string, options: ImportOptions = {}): 
   }
 
   const manifest = await readManifest(packDir)
-  await validatePackFiles(packDir, manifest)
+  const bundle = await buildBundle(packDir, manifest)
 
-  const files = await collectImportFiles(packDir, manifest)
-  const { conflicts, skippedRels, skippedLabels } = await detectConflicts(files)
-
-  const written: string[] = []
-  const overwritten: string[] = []
-  const warnings: string[] = []
-
-  if (conflicts.length > 0 && !options.force && !options.merge) {
-    const list = conflicts.map(c => `  ${c.rel}`).join('\n')
-    throw new IncurError({
-      code: 'PACK_CONFLICTS',
-      message: `Import blocked — ${conflicts.length} file(s) conflict with existing content:\n${list}`,
-      hint: 'Use --force to overwrite or --merge to keep both.',
-    })
-  }
-
-  // Build rename map for merge mode
-  const renameMap = new Map<string, string>()
-  const conflictRels = new Set(conflicts.map(c => c.rel))
-
-  if (options.merge && conflicts.length > 0) {
-    for (const conflict of conflicts) {
-      const parts = conflict.rel.split('/')
-      const fileName = parts[parts.length - 1]
-      const parentRel = parts.slice(0, -1).join('/')
-      const parentAbs = join(paths.root, parentRel)
-      const ext = fileName.endsWith('.yaml') ? '.yaml' : '.md'
-      const slug = basename(fileName, ext)
-
-      const newSlug = await findMergeName(parentAbs, slug, manifest.name, ext)
-      renameMap.set(conflict.rel, newSlug)
-    }
-  }
-
-  // Track which files are handled by brain patching so we don't write them twice
-  const brainRel = `brains/${manifest.brain}.yaml`
-  const needsBrainPatch = options.merge && renameMap.size > 0
-
-  // Copy files
-  for (const file of files) {
-    const target = join(paths.root, file.rel)
-    await mkdir(dirname(target), { recursive: true })
-
-    if (file.isDir) {
-      const srcEntries = await readdir(file.src)
-      for (const entry of srcEntries.filter(f => f.endsWith('.md'))) {
-        const srcFile = join(file.src, entry)
-        const rel = `${file.rel}/${entry}`
-        const targetFile = join(target, entry)
-
-        if (skippedRels.has(rel)) continue
-
-        if (conflictRels.has(rel)) {
-          if (options.force) {
-            await cp(srcFile, targetFile)
-            overwritten.push(targetFile)
-          } else if (options.merge) {
-            const newSlug = renameMap.get(rel)!
-            const newTarget = join(target, `${newSlug}.md`)
-            await cp(srcFile, newTarget)
-            written.push(newTarget)
-          }
-        } else {
-          await mkdir(target, { recursive: true })
-          await cp(srcFile, targetFile)
-          written.push(targetFile)
-        }
-      }
-    } else {
-      if (skippedRels.has(file.rel)) continue
-
-      // Skip brain file copy if we'll write a patched version later
-      if (needsBrainPatch && file.rel === brainRel && !conflictRels.has(brainRel)) continue
-
-      if (conflictRels.has(file.rel)) {
-        if (options.force) {
-          await cp(file.src, target)
-          overwritten.push(target)
-        } else if (options.merge) {
-          // Brain will be handled by patching below
-          if (file.rel === brainRel) continue
-
-          const newSlug = renameMap.get(file.rel)!
-          const ext = file.rel.endsWith('.yaml') ? '.yaml' : '.md'
-          const parentRel = dirname(file.rel)
-          const newTarget = join(paths.root, parentRel, `${newSlug}${ext}`)
-          await cp(file.src, newTarget)
-          written.push(newTarget)
-        }
-      } else {
-        await cp(file.src, target)
-        written.push(target)
-      }
-    }
-  }
-
-  // In merge mode, write a patched brain YAML with renamed references
-  if (needsBrainPatch) {
-    const brainRenamed = renameMap.get(brainRel)
-
-    const packBrainContent = await readFile(join(packDir, 'brains', `${manifest.brain}.yaml`), 'utf-8')
-    const brainConfig = parseYaml(packBrainContent) as Record<string, unknown>
-
-    // Patch soul reference
-    const soulRel = `souls/${manifest.contents.soul}.md`
-    if (renameMap.has(soulRel)) {
-      brainConfig.soul = renameMap.get(soulRel)
-    }
-
-    // Patch persona reference
-    const personaRel = `personas/${manifest.contents.persona}.md`
-    if (renameMap.has(personaRel)) {
-      brainConfig.persona = renameMap.get(personaRel)
-    }
-
-    // Patch rules (single-file rules only — directory rules keep their name)
-    if (Array.isArray(brainConfig.rules)) {
-      brainConfig.rules = (brainConfig.rules as string[]).map(rule => {
-        const fileRel = `rules/${rule}.md`
-        if (renameMap.has(fileRel)) return renameMap.get(fileRel)
-        return rule
-      })
-    }
-
-    // Write the patched brain (possibly renamed)
-    const brainSlug = brainRenamed ?? manifest.brain
-    const brainTarget = join(paths.brains, `${brainSlug}.yaml`)
-    await writeFile(brainTarget, stringifyYaml(brainConfig))
-    written.push(brainTarget)
-  }
+  const api = await getApi()
+  const result = await api.post<ApiImportResult>('/api/v1/import', bundle)
 
   // Activate brain if requested
   let activated = false
   if (options.activate) {
-    const config = await readBrain(manifest.brain)
-    await withStateLock(async () => {
-      const state = await readState()
-      state.soul = config.soul
-      state.persona = config.persona
-      state.rules = config.rules
-      await writeState(state)
-      await sync()
+    const brain = await api.get<ApiBrain>(`/api/v1/brains/${manifest.brain}`)
+    await putState(api, {
+      soul_slug: brain.soul_slug,
+      persona_slug: brain.persona_slug,
+      rule_slugs: brain.rule_slugs,
     })
+    await sync({ api })
     activated = true
   }
 
@@ -662,10 +405,13 @@ export async function importPack(packDir: string, options: ImportOptions = {}): 
     imported: manifest.name,
     from: packDir,
     brain: manifest.brain,
-    written,
-    skipped: skippedLabels,
-    overwritten,
+    counts: {
+      souls: result.imported.souls,
+      personas: result.imported.personas,
+      rules: result.imported.rules,
+      brains: result.imported.brains,
+    },
     activated,
-    warnings,
+    warnings: result.warnings,
   }
 }

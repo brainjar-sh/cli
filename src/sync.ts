@@ -1,46 +1,19 @@
 import { readFile, writeFile, copyFile, mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
-import { type Backend, getBackendConfig, paths } from './paths.js'
-import { type State, readState, readLocalState, readEnvState, mergeState, requireBrainjarDir, stripFrontmatter, resolveRuleContent } from './state.js'
+import { type Backend, getBackendConfig } from './paths.js'
+import { getEffectiveState } from './state.js'
+import { getApi, type BrainjarClient } from './client.js'
+import type { ApiEffectiveState, ApiSoul, ApiPersona, ApiRule } from './api-types.js'
 
 export const MARKER_START = '<!-- brainjar:start -->'
 export const MARKER_END = '<!-- brainjar:end -->'
 
 export interface SyncOptions {
   backend?: Backend
-  local?: boolean
-  envOverrides?: Record<string, string>
+  project?: boolean
+  api?: BrainjarClient
 }
 
-async function inlineSoul(name: string, sections: string[]) {
-  const raw = await readFile(join(paths.souls, `${name}.md`), 'utf-8')
-  const content = stripFrontmatter(raw)
-  sections.push('')
-  sections.push('## Soul')
-  sections.push('')
-  sections.push(content)
-}
-
-async function inlinePersona(name: string, sections: string[]) {
-  const raw = await readFile(join(paths.personas, `${name}.md`), 'utf-8')
-  const content = stripFrontmatter(raw)
-  sections.push('')
-  sections.push('## Persona')
-  sections.push('')
-  sections.push(content)
-}
-
-async function inlineRules(rules: string[], sections: string[], warnings: string[]) {
-  for (const rule of rules) {
-    const contents = await resolveRuleContent(rule, warnings)
-    for (const content of contents) {
-      sections.push('')
-      sections.push(content)
-    }
-  }
-}
-
-/** Extract content before, inside, and after brainjar markers. */
+/** Extract content before and after brainjar markers. */
 function parseMarkers(content: string): { before: string; after: string } | null {
   const startIdx = content.indexOf(MARKER_START)
   const endIdx = content.indexOf(MARKER_END)
@@ -51,18 +24,60 @@ function parseMarkers(content: string): { before: string; after: string } | null
   return { before, after }
 }
 
-export async function sync(options?: Backend | SyncOptions) {
-  await requireBrainjarDir()
-
-  // Normalize legacy call signature: sync('claude') → sync({ backend: 'claude' })
-  const opts: SyncOptions = typeof options === 'string' ? { backend: options } : options ?? {}
-
-  const globalState = await readState()
-  const backend: Backend = opts.backend ?? (globalState.backend as Backend) ?? 'claude'
-  const config = getBackendConfig(backend, { local: opts.local })
-
-  const envState = readEnvState(opts.envOverrides)
+/** Fetch content from server and assemble the brainjar markdown sections. */
+async function assembleFromServer(api: BrainjarClient, state: ApiEffectiveState): Promise<{ sections: string[]; warnings: string[] }> {
+  const sections: string[] = []
   const warnings: string[] = []
+
+  if (state.soul.slug) {
+    try {
+      const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul.slug}`)
+      sections.push('')
+      sections.push('## Soul')
+      sections.push('')
+      sections.push(soul.content.trim())
+    } catch {
+      warnings.push(`Could not fetch soul "${state.soul.slug}"`)
+    }
+  }
+
+  if (state.persona.slug) {
+    try {
+      const persona = await api.get<ApiPersona>(`/api/v1/personas/${state.persona.slug}`)
+      sections.push('')
+      sections.push('## Persona')
+      sections.push('')
+      sections.push(persona.content.trim())
+    } catch {
+      warnings.push(`Could not fetch persona "${state.persona.slug}"`)
+    }
+  }
+
+  const activeRules = state.rules.filter(r => !r.scope.startsWith('-'))
+  for (const rule of activeRules) {
+    try {
+      const ruleData = await api.get<ApiRule>(`/api/v1/rules/${rule.slug}`)
+      for (const entry of ruleData.entries) {
+        sections.push('')
+        sections.push(entry.content.trim())
+      }
+    } catch {
+      warnings.push(`Could not fetch rule "${rule.slug}"`)
+    }
+  }
+
+  return { sections, warnings }
+}
+
+export async function sync(options?: SyncOptions) {
+  const opts = options ?? {}
+  const api = opts.api ?? await getApi()
+
+  const state = await getEffectiveState(api)
+  const backend: Backend = opts.backend ?? 'claude'
+  const config = getBackendConfig(backend, { local: opts.project })
+
+  const { sections, warnings } = await assembleFromServer(api, state)
 
   // Read existing config file
   let existingContent: string | null = null
@@ -81,41 +96,8 @@ export async function sync(options?: Backend | SyncOptions) {
     }
   }
 
-  // Build the brainjar section content
-  const sections: string[] = []
-
-  if (opts.local) {
-    // Local mode: read local state + env, only write overridden layers.
-    // Everything else falls back to the global config (Claude Code merges both files).
-    const localState = await readLocalState()
-    const effective = mergeState(globalState, localState, envState)
-
-    if ('soul' in localState && effective.soul.value) {
-      await inlineSoul(effective.soul.value, sections)
-    }
-    if ('persona' in localState && effective.persona.value) {
-      await inlinePersona(effective.persona.value, sections)
-    }
-    if (localState.rules) {
-      // Inline the effective rules that are active (not removed)
-      const activeRules = effective.rules
-        .filter(r => !r.scope.startsWith('-'))
-        .map(r => r.value)
-      // But only write rules section if local state has rules overrides
-      await inlineRules(activeRules, sections, warnings)
-    }
-  } else {
-    // Global mode: apply env overrides on top of global state, write all layers
-    const effective = mergeState(globalState, {}, envState)
-    const effectiveSoul = effective.soul.value
-    const effectivePersona = effective.persona.value
-    const effectiveRules = effective.rules.filter(r => !r.scope.startsWith('-')).map(r => r.value)
-
-    if (effectiveSoul) await inlineSoul(effectiveSoul, sections)
-    if (effectivePersona) await inlinePersona(effectivePersona, sections)
-    await inlineRules(effectiveRules, sections, warnings)
-
-    // Local Overrides note (only for global config)
+  // Add project-level overrides note for global config
+  if (!opts.project) {
     sections.push('')
     sections.push('## Project-Level Overrides')
     sections.push('')
@@ -136,8 +118,6 @@ export async function sync(options?: Backend | SyncOptions) {
   const parsed = existingContent ? parseMarkers(existingContent) : null
 
   if (parsed) {
-    // Existing file with markers — replace the brainjar section, preserve the rest
-    // Discard legacy brainjar content that ended up outside markers during migration
     const before = parsed.before
     const after = parsed.after?.includes('# Managed by brainjar') ? '' : parsed.after
     const parts: string[] = []
@@ -146,16 +126,12 @@ export async function sync(options?: Backend | SyncOptions) {
     if (after) parts.push('', after)
     output = parts.join('\n')
   } else if (existingContent && !existingContent.includes(MARKER_START)) {
-    // Existing file without markers (first sync)
     if (existingContent.includes('# Managed by brainjar')) {
-      // Legacy brainjar-managed file — replace entirely
       output = brainjarBlock + '\n'
     } else {
-      // User-owned file — prepend brainjar section, preserve user content
       output = brainjarBlock + '\n\n' + existingContent
     }
   } else {
-    // No existing file
     output = brainjarBlock + '\n'
   }
 
@@ -165,7 +141,7 @@ export async function sync(options?: Backend | SyncOptions) {
   return {
     backend,
     written: config.configFile,
-    local: opts.local ?? false,
+    project: opts.project ?? false,
     ...(warnings.length ? { warnings } : {}),
   }
 }

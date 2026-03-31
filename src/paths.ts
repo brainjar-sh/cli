@@ -42,6 +42,4 @@ export const paths = {
   get rules() { return join(getBrainjarDir(), 'rules') },
   get brains() { return join(getBrainjarDir(), 'brains') },
   get config() { return join(getBrainjarDir(), 'config.yaml') },
-  get state() { return join(getBrainjarDir(), 'state.yaml') },
-  get localState() { return join(getLocalDir(), 'state.yaml') },
 }

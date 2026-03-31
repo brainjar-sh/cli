@@ -1,8 +1,9 @@
 import { Cli, z, Errors } from 'incur'
+import { basename } from 'node:path'
 
 const { IncurError } = Errors
-import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug } from '../state.js'
-// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { normalizeSlug, getEffectiveState, putState } from '../state.js'
+import { sync } from '../sync.js'
 import { getApi } from '../client.js'
 import type { ApiPersona, ApiPersonaList, ApiRuleList } from '../api-types.js'
 
@@ -103,7 +104,7 @@ export const persona = Cli.create('persona', {
       name: z.string().optional().describe('Persona name to show (defaults to active persona)'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Show local persona override (if any)'),
+      project: z.boolean().default(false).describe('Show project persona override (if any)'),
       short: z.boolean().default(false).describe('Print only the active persona name'),
     }),
     async run(c) {
@@ -111,12 +112,8 @@ export const persona = Cli.create('persona', {
 
       if (c.options.short) {
         if (c.args.name) return c.args.name
-        await requireBrainjarDir()
-        const global = await readState()
-        const local = await readLocalState()
-        const env = readEnvState()
-        const effective = mergeState(global, local, env)
-        return effective.persona.value ?? 'none'
+        const state = await getEffectiveState(api)
+        return state.persona.slug ?? 'none'
       }
 
       if (c.args.name) {
@@ -136,30 +133,27 @@ export const persona = Cli.create('persona', {
         }
       }
 
-      if (c.options.local) {
-        await requireBrainjarDir()
-        const local = await readLocalState()
-        if (!('persona' in local)) return { active: false, scope: 'local', note: 'No local persona override (cascades from global)' }
-        if (local.persona === null) return { active: false, scope: 'local', name: null, note: 'Explicitly unset at local scope' }
+      if (c.options.project) {
+        const state = await api.get<import('../api-types.js').ApiStateOverride>('/api/v1/state/override', {
+          project: basename(process.cwd()),
+        })
+        if (state.persona_slug === undefined) return { active: false, scope: 'project', note: 'No project persona override (cascades from workspace)' }
+        if (state.persona_slug === null) return { active: false, scope: 'project', name: null, note: 'Explicitly unset at project scope' }
         try {
-          const p = await api.get<ApiPersona>(`/api/v1/personas/${local.persona}`)
-          return { active: true, scope: 'local', name: local.persona, title: p.title, content: p.content, rules: p.bundled_rules }
+          const p = await api.get<ApiPersona>(`/api/v1/personas/${state.persona_slug}`)
+          return { active: true, scope: 'project', name: state.persona_slug, title: p.title, content: p.content, rules: p.bundled_rules }
         } catch {
-          return { active: false, scope: 'local', name: local.persona, error: 'Not found on server' }
+          return { active: false, scope: 'project', name: state.persona_slug, error: 'Not found on server' }
         }
       }
 
-      await requireBrainjarDir()
-      const global = await readState()
-      const local = await readLocalState()
-      const env = readEnvState()
-      const effective = mergeState(global, local, env)
-      if (!effective.persona.value) return { active: false }
+      const state = await getEffectiveState(api)
+      if (!state.persona.slug) return { active: false }
       try {
-        const p = await api.get<ApiPersona>(`/api/v1/personas/${effective.persona.value}`)
-        return { active: true, name: effective.persona.value, scope: effective.persona.scope, title: p.title, content: p.content, rules: p.bundled_rules }
+        const p = await api.get<ApiPersona>(`/api/v1/personas/${state.persona.slug}`)
+        return { active: true, name: state.persona.slug, scope: state.persona.scope, title: p.title, content: p.content, rules: p.bundled_rules }
       } catch {
-        return { active: false, name: effective.persona.value, error: 'Not found on server' }
+        return { active: false, name: state.persona.slug, error: 'Not found on server' }
       }
     },
   })
@@ -169,17 +163,16 @@ export const persona = Cli.create('persona', {
       name: z.string().describe('Persona name'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Write to local .claude/CLAUDE.md instead of global'),
+      project: z.boolean().default(false).describe('Apply at project scope'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'persona name')
       const api = await getApi()
 
       // Validate and get bundled rules
-      let persona: ApiPersona
+      let personaData: ApiPersona
       try {
-        persona = await api.get<ApiPersona>(`/api/v1/personas/${name}`)
+        personaData = await api.get<ApiPersona>(`/api/v1/personas/${name}`)
       } catch (e) {
         if (e instanceof IncurError && e.code === 'NOT_FOUND') {
           throw new IncurError({
@@ -191,29 +184,20 @@ export const persona = Cli.create('persona', {
         throw e
       }
 
-      const bundledRules = persona.bundled_rules
+      const bundledRules = personaData.bundled_rules
 
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          local.persona = name
-          if (bundledRules.length > 0) {
-            local.rules = { ...local.rules, add: bundledRules }
-          }
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          state.persona = name
-          if (bundledRules.length > 0) state.rules = bundledRules
-          await writeState(state)
-          // sync() removed — phase 3
-        })
-      }
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, {
+        persona_slug: name,
+        rule_slugs: bundledRules.length > 0 ? bundledRules : undefined,
+      }, mutationOpts)
 
-      const result: Record<string, unknown> = { activated: name, local: c.options.local }
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
+
+      const result: Record<string, unknown> = { activated: name, project: c.options.project }
       if (bundledRules.length > 0) result.rules = bundledRules
       return result
     },
@@ -221,31 +205,19 @@ export const persona = Cli.create('persona', {
   .command('drop', {
     description: 'Deactivate the current persona',
     options: z.object({
-      local: z.boolean().default(false).describe('Remove local persona override or deactivate global persona'),
+      project: z.boolean().default(false).describe('Remove project persona override or deactivate workspace persona'),
     }),
     async run(c) {
-      await requireBrainjarDir()
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          delete local.persona
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          if (!state.persona) {
-            throw new IncurError({
-              code: 'NO_ACTIVE_PERSONA',
-              message: 'No active persona to deactivate.',
-            })
-          }
-          state.persona = null
-          await writeState(state)
-          // sync() removed — phase 3
-        })
-      }
-      return { deactivated: true, local: c.options.local }
+      const api = await getApi()
+
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, { persona_slug: null }, mutationOpts)
+
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
+
+      return { deactivated: true, project: c.options.project }
     },
   })

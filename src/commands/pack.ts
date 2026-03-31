@@ -24,19 +24,15 @@ const exportCmd = Cli.create('export', {
 })
 
 const importCmd = Cli.create('import', {
-  description: 'Import a pack directory into ~/.brainjar/',
+  description: 'Import a pack directory into the server',
   args: z.object({
     path: z.string().describe('Path to pack directory'),
   }),
   options: z.object({
-    force: z.boolean().default(false).describe('Overwrite existing files on conflict'),
-    merge: z.boolean().default(false).describe('Rename incoming files on conflict as <name>-from-<packname>'),
     activate: z.boolean().default(false).describe('Activate the brain after successful import'),
   }),
   async run(c) {
     return importPack(resolve(c.args.path), {
-      force: c.options.force,
-      merge: c.options.merge,
       activate: c.options.activate,
     })
   },

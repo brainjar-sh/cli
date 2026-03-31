@@ -1,8 +1,9 @@
 import { Cli, z, Errors } from 'incur'
+import { basename } from 'node:path'
 
 const { IncurError } = Errors
-import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug } from '../state.js'
-// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { normalizeSlug, getEffectiveState, putState } from '../state.js'
+import { sync } from '../sync.js'
 import { getApi } from '../client.js'
 import type { ApiRule, ApiRuleList } from '../api-types.js'
 
@@ -65,30 +66,28 @@ export const rules = Cli.create('rules', {
   .command('list', {
     description: 'List available and active rules',
     options: z.object({
-      local: z.boolean().default(false).describe('Show local rules delta only'),
+      project: z.boolean().default(false).describe('Show project rules delta only'),
     }),
     async run(c) {
       const api = await getApi()
       const available = await api.get<ApiRuleList>('/api/v1/rules')
       const availableSlugs = available.rules.map(r => r.slug)
 
-      if (c.options.local) {
-        await requireBrainjarDir()
-        const local = await readLocalState()
+      if (c.options.project) {
+        const override = await api.get<import('../api-types.js').ApiStateOverride>('/api/v1/state/override', {
+          project: basename(process.cwd()),
+        })
         return {
-          add: local.rules?.add ?? [],
-          remove: local.rules?.remove ?? [],
+          add: override.rules_to_add ?? [],
+          remove: override.rules_to_remove ?? [],
           available: availableSlugs,
-          scope: 'local',
+          scope: 'project',
         }
       }
 
-      await requireBrainjarDir()
-      const [global, local] = await Promise.all([readState(), readLocalState()])
-      const env = readEnvState()
-      const effective = mergeState(global, local, env)
-      const active = effective.rules.filter(r => !r.scope.startsWith('-')).map(r => r.value)
-      return { active, available: availableSlugs, rules: effective.rules }
+      const state = await getEffectiveState(api)
+      const active = state.rules.filter(r => !r.scope.startsWith('-')).map(r => r.slug)
+      return { active, available: availableSlugs, rules: state.rules }
     },
   })
   .command('show', {
@@ -122,10 +121,9 @@ export const rules = Cli.create('rules', {
       name: z.string().describe('Rule name to activate'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Add rule as a local override'),
+      project: z.boolean().default(false).describe('Add rule at project scope'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'rule name')
       const api = await getApi()
 
@@ -143,28 +141,15 @@ export const rules = Cli.create('rules', {
         throw e
       }
 
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          const adds = local.rules?.add ?? []
-          if (!adds.includes(name)) adds.push(name)
-          const removes = (local.rules?.remove ?? []).filter(r => r !== name)
-          local.rules = { add: adds, ...(removes.length ? { remove: removes } : {}) }
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          if (!state.rules.includes(name)) {
-            state.rules.push(name)
-            await writeState(state)
-          }
-          // sync() removed — phase 3
-        })
-      }
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, { rules_to_add: [name] }, mutationOpts)
 
-      return { activated: name, local: c.options.local }
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
+
+      return { activated: name, project: c.options.project }
     },
   })
   .command('remove', {
@@ -173,38 +158,20 @@ export const rules = Cli.create('rules', {
       name: z.string().describe('Rule name to remove'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Remove rule as a local override'),
+      project: z.boolean().default(false).describe('Remove rule at project scope'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'rule name')
+      const api = await getApi()
 
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          const removes = local.rules?.remove ?? []
-          if (!removes.includes(name)) removes.push(name)
-          const adds = (local.rules?.add ?? []).filter(r => r !== name)
-          local.rules = { ...(adds.length ? { add: adds } : {}), remove: removes }
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          if (!state.rules.includes(name)) {
-            throw new IncurError({
-              code: 'RULE_NOT_ACTIVE',
-              message: `Rule "${name}" is not active.`,
-              hint: 'Run `brainjar rules list` to see active rules.',
-            })
-          }
-          state.rules = state.rules.filter(r => r !== name)
-          await writeState(state)
-          // sync() removed — phase 3
-        })
-      }
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, { rules_to_remove: [name] }, mutationOpts)
 
-      return { removed: name, local: c.options.local }
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
+
+      return { removed: name, project: c.options.project }
     },
   })

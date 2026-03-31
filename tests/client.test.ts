@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { rm, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createClient } from './client.js'
+import { createClient } from '../src/client.js'
 
 const TEST_HOME = join(import.meta.dir, '..', '.test-home-client')
 let server: ReturnType<typeof Bun.serve> | null = null

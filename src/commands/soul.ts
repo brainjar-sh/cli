@@ -1,8 +1,9 @@
 import { Cli, z, Errors } from 'incur'
+import { basename } from 'node:path'
 
 const { IncurError } = Errors
-import { readState, writeState, withStateLock, readLocalState, writeLocalState, withLocalStateLock, readEnvState, mergeState, requireBrainjarDir, normalizeSlug } from '../state.js'
-// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { normalizeSlug, getEffectiveState, putState } from '../state.js'
+import { sync } from '../sync.js'
 import { getApi } from '../client.js'
 import type { ApiSoul, ApiSoulList } from '../api-types.js'
 
@@ -71,7 +72,7 @@ export const soul = Cli.create('soul', {
       name: z.string().optional().describe('Soul name to show (defaults to active soul)'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Show local soul override (if any)'),
+      project: z.boolean().default(false).describe('Show project soul override (if any)'),
       short: z.boolean().default(false).describe('Print only the active soul name'),
     }),
     async run(c) {
@@ -79,12 +80,8 @@ export const soul = Cli.create('soul', {
 
       if (c.options.short) {
         if (c.args.name) return c.args.name
-        await requireBrainjarDir()
-        const global = await readState()
-        const local = await readLocalState()
-        const env = readEnvState()
-        const effective = mergeState(global, local, env)
-        return effective.soul.value ?? 'none'
+        const state = await getEffectiveState(api)
+        return state.soul.slug ?? 'none'
       }
 
       if (c.args.name) {
@@ -104,30 +101,27 @@ export const soul = Cli.create('soul', {
         }
       }
 
-      if (c.options.local) {
-        await requireBrainjarDir()
-        const local = await readLocalState()
-        if (!('soul' in local)) return { active: false, scope: 'local', note: 'No local soul override (cascades from global)' }
-        if (local.soul === null) return { active: false, scope: 'local', name: null, note: 'Explicitly unset at local scope' }
+      if (c.options.project) {
+        const state = await api.get<import('../api-types.js').ApiStateOverride>('/api/v1/state/override', {
+          project: basename(process.cwd()),
+        })
+        if (state.soul_slug === undefined) return { active: false, scope: 'project', note: 'No project soul override (cascades from workspace)' }
+        if (state.soul_slug === null) return { active: false, scope: 'project', name: null, note: 'Explicitly unset at project scope' }
         try {
-          const soul = await api.get<ApiSoul>(`/api/v1/souls/${local.soul}`)
-          return { active: true, scope: 'local', name: local.soul, title: soul.title, content: soul.content }
+          const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul_slug}`)
+          return { active: true, scope: 'project', name: state.soul_slug, title: soul.title, content: soul.content }
         } catch {
-          return { active: false, scope: 'local', name: local.soul, error: 'Not found on server' }
+          return { active: false, scope: 'project', name: state.soul_slug, error: 'Not found on server' }
         }
       }
 
-      await requireBrainjarDir()
-      const global = await readState()
-      const local = await readLocalState()
-      const env = readEnvState()
-      const effective = mergeState(global, local, env)
-      if (!effective.soul.value) return { active: false }
+      const state = await getEffectiveState(api)
+      if (!state.soul.slug) return { active: false }
       try {
-        const soul = await api.get<ApiSoul>(`/api/v1/souls/${effective.soul.value}`)
-        return { active: true, name: effective.soul.value, scope: effective.soul.scope, title: soul.title, content: soul.content }
+        const soul = await api.get<ApiSoul>(`/api/v1/souls/${state.soul.slug}`)
+        return { active: true, name: state.soul.slug, scope: state.soul.scope, title: soul.title, content: soul.content }
       } catch {
-        return { active: false, name: effective.soul.value, error: 'Not found on server' }
+        return { active: false, name: state.soul.slug, error: 'Not found on server' }
       }
     },
   })
@@ -137,10 +131,9 @@ export const soul = Cli.create('soul', {
       name: z.string().describe('Soul name'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Write to local .claude/CLAUDE.md instead of global'),
+      project: z.boolean().default(false).describe('Apply at project scope'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'soul name')
       const api = await getApi()
 
@@ -158,53 +151,33 @@ export const soul = Cli.create('soul', {
         throw e
       }
 
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          local.soul = name
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          state.soul = name
-          await writeState(state)
-          // sync() removed — phase 3
-        })
-      }
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, { soul_slug: name }, mutationOpts)
 
-      return { activated: name, local: c.options.local }
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
+
+      return { activated: name, project: c.options.project }
     },
   })
   .command('drop', {
     description: 'Deactivate the current soul',
     options: z.object({
-      local: z.boolean().default(false).describe('Remove local soul override or deactivate global soul'),
+      project: z.boolean().default(false).describe('Remove project soul override or deactivate workspace soul'),
     }),
     async run(c) {
-      await requireBrainjarDir()
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          delete local.soul
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          if (!state.soul) {
-            throw new IncurError({
-              code: 'NO_ACTIVE_SOUL',
-              message: 'No active soul to deactivate.',
-            })
-          }
-          state.soul = null
-          await writeState(state)
-          // sync() removed — phase 3
-        })
-      }
-      return { deactivated: true, local: c.options.local }
+      const api = await getApi()
+
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, { soul_slug: null }, mutationOpts)
+
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
+
+      return { deactivated: true, project: c.options.project }
     },
   })

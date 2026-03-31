@@ -2,7 +2,6 @@ import { describe, test, expect, beforeEach, afterEach, afterAll, beforeAll } fr
 import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readState, writeState, readLocalState } from '../src/state.js'
 
 import { init } from '../src/commands/init.js'
 import { soul } from '../src/commands/soul.js'
@@ -21,6 +20,18 @@ interface MockStore {
   personas: Map<string, { slug: string; title: string | null; content: string; bundled_rules: string[] }>
   rules: Map<string, { slug: string; entries: { name: string; content: string }[] }>
   brains: Map<string, { slug: string; soul_slug: string; persona_slug: string; rule_slugs: string[] }>
+  // Server-side state
+  effectiveState: {
+    soul: { slug: string | null; scope: string }
+    persona: { slug: string | null; scope: string }
+    rules: { slug: string; scope: string }[]
+  }
+  // Track mutations received via PUT /api/v1/state
+  lastMutation: Record<string, unknown> | null
+  lastMutationProject: string | null
+  // Override state per scope
+  workspaceOverride: Record<string, unknown>
+  projectOverrides: Map<string, Record<string, unknown>>
 }
 
 let mockServer: ReturnType<typeof Bun.serve>
@@ -33,6 +44,15 @@ function resetStore() {
     personas: new Map(),
     rules: new Map(),
     brains: new Map(),
+    effectiveState: {
+      soul: { slug: null, scope: 'workspace' },
+      persona: { slug: null, scope: 'workspace' },
+      rules: [],
+    },
+    lastMutation: null,
+    lastMutationProject: null,
+    workspaceOverride: {},
+    projectOverrides: new Map(),
   }
 }
 
@@ -44,9 +64,122 @@ beforeAll(() => {
       const url = new URL(req.url)
       const path = url.pathname
       const method = req.method
+      const project = req.headers.get('x-brainjar-project')
 
       // Health check
       if (path === '/healthz') return Response.json({ status: 'ok' })
+
+      // ─── State endpoints ──────────────────────────────────────────
+      if (path === '/api/v1/state' && method === 'GET') {
+        return Response.json(store.effectiveState)
+      }
+      if (path === '/api/v1/state' && method === 'PUT') {
+        return (async () => {
+          const body = await req.json() as Record<string, unknown>
+          store.lastMutation = body
+          store.lastMutationProject = project
+
+          // Apply mutation to effective state for subsequent reads
+          if (body.soul_slug !== undefined) {
+            store.effectiveState.soul = { slug: body.soul_slug as string | null, scope: project ? 'project' : 'workspace' }
+          }
+          if (body.persona_slug !== undefined) {
+            store.effectiveState.persona = { slug: body.persona_slug as string | null, scope: project ? 'project' : 'workspace' }
+          }
+          if (body.rule_slugs !== undefined) {
+            store.effectiveState.rules = (body.rule_slugs as string[]).map(slug => ({ slug, scope: project ? 'project' : 'workspace' }))
+          }
+          if (body.rules_to_add) {
+            const existing = store.effectiveState.rules.map(r => r.slug)
+            for (const slug of body.rules_to_add as string[]) {
+              if (!existing.includes(slug)) {
+                store.effectiveState.rules.push({ slug, scope: project ? '+project' : 'workspace' })
+              }
+            }
+          }
+          if (body.rules_to_remove) {
+            const toRemove = body.rules_to_remove as string[]
+            store.effectiveState.rules = store.effectiveState.rules.filter(r => !toRemove.includes(r.slug))
+          }
+
+          return Response.json({ ok: true })
+        })()
+      }
+      if (path === '/api/v1/state/override' && method === 'GET') {
+        if (project) {
+          const override = store.projectOverrides.get(project) ?? {}
+          return Response.json(override)
+        }
+        return Response.json(store.workspaceOverride)
+      }
+
+      // ─── Compose endpoint ─────────────────────────────────────────
+      if (path === '/api/v1/compose' && method === 'POST') {
+        return (async () => {
+          const body = await req.json() as Record<string, unknown>
+          const warnings: string[] = []
+          const sections: string[] = []
+
+          let soulSlug: string | undefined
+          let personaSlug: string | undefined
+          let ruleSlugs: string[] = []
+
+          if (body.brain) {
+            const brainData = store.brains.get(body.brain as string)
+            if (!brainData) {
+              return Response.json({ error: `Brain "${body.brain}" not found`, code: 'BRAIN_NOT_FOUND' }, { status: 404 })
+            }
+            soulSlug = brainData.soul_slug
+            personaSlug = brainData.persona_slug
+            ruleSlugs = brainData.rule_slugs
+          } else if (body.persona) {
+            personaSlug = body.persona as string
+            // Use active soul from effective state
+            if (store.effectiveState.soul.slug) {
+              soulSlug = store.effectiveState.soul.slug
+            }
+            // Use persona's bundled rules
+            const p = store.personas.get(personaSlug)
+            if (p?.bundled_rules?.length) {
+              ruleSlugs = p.bundled_rules
+            }
+          }
+
+          // Assemble prompt
+          if (soulSlug) {
+            const s = store.souls.get(soulSlug)
+            if (s) sections.push(s.content.trim())
+          }
+
+          if (personaSlug) {
+            const p = store.personas.get(personaSlug)
+            if (p) sections.push(p.content.trim())
+          }
+
+          for (const rSlug of ruleSlugs) {
+            const r = store.rules.get(rSlug)
+            if (r) {
+              for (const entry of r.entries) {
+                sections.push(entry.content.trim())
+              }
+            } else {
+              warnings.push(`Rule "${rSlug}" not found`)
+            }
+          }
+
+          if (body.task) {
+            sections.push(`# Task\n\n${body.task}`)
+          }
+
+          return Response.json({
+            prompt: sections.join('\n\n'),
+            soul: soulSlug ?? null,
+            persona: personaSlug ?? 'unknown',
+            rules: ruleSlugs,
+            warnings,
+          })
+        })()
+      }
 
       // Souls
       if (path === '/api/v1/souls' && method === 'GET') {
@@ -235,18 +368,17 @@ async function run(cli: any, argv: string[]): Promise<{ output: string; exitCode
   return { output, exitCode, parsed }
 }
 
-async function setState(state: Partial<{
-  backend: string | null
+/** Set mock server effective state directly. */
+function setState(state: Partial<{
   soul: string | null
   persona: string | null
   rules: string[]
 }>) {
-  return writeState({
-    backend: state.backend ?? null,
-    soul: state.soul ?? null,
-    persona: state.persona ?? null,
-    rules: state.rules ?? [],
-  })
+  store.effectiveState = {
+    soul: { slug: state.soul ?? null, scope: 'workspace' },
+    persona: { slug: state.persona ?? null, scope: 'workspace' },
+    rules: (state.rules ?? []).map(slug => ({ slug, scope: 'workspace' })),
+  }
 }
 
 /** Seed content into mock server store. */
@@ -326,7 +458,7 @@ describe('soul commands', () => {
 
   test('show returns active soul content', async () => {
     seedSoul('warrior', '# Warrior\n\nBold and brave.')
-    await setState({ soul: 'warrior', backend: 'claude' })
+    setState({ soul: 'warrior' })
     const { parsed } = await run(soul, ['show', '--format', 'json'])
     expect(parsed.active).toBe(true)
     expect(parsed.name).toBe('warrior')
@@ -334,20 +466,17 @@ describe('soul commands', () => {
   })
 
   test('show returns inactive when no soul set', async () => {
-    await setState({ backend: 'claude' })
     const { parsed } = await run(soul, ['show', '--format', 'json'])
     expect(parsed.active).toBe(false)
   })
 
   test('use activates soul and updates state', async () => {
     seedSoul('warrior', '# Warrior')
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(soul, ['use', 'warrior', '--local', '--format', 'json'])
+    const { parsed } = await run(soul, ['use', 'warrior', '--project', '--format', 'json'])
     expect(parsed.activated).toBe('warrior')
   })
 
   test('use rejects missing soul', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(soul, ['use', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('SOUL_NOT_FOUND')
@@ -355,27 +484,22 @@ describe('soul commands', () => {
 
   test('drop deactivates active soul', async () => {
     seedSoul('warrior', '# Warrior')
-    await setState({ soul: 'warrior', backend: 'claude' })
-    const { parsed } = await run(soul, ['drop', '--local', '--format', 'json'])
+    setState({ soul: 'warrior' })
+    const { parsed } = await run(soul, ['drop', '--project', '--format', 'json'])
     expect(parsed.deactivated).toBe(true)
   })
 
-  test('drop --local removes key from local state instead of nullifying', async () => {
+  test('drop sends null soul mutation to server', async () => {
     seedSoul('warrior', '# Warrior')
-    await setState({ soul: 'warrior', backend: 'claude' })
-    await run(soul, ['use', 'warrior', '--local', '--format', 'json'])
-    let local = await readLocalState()
-    expect('soul' in local).toBe(true)
-    await run(soul, ['drop', '--local', '--format', 'json'])
-    local = await readLocalState()
-    expect('soul' in local).toBe(false)
+    setState({ soul: 'warrior' })
+    await run(soul, ['drop', '--format', 'json'])
+    expect(store.lastMutation).toEqual({ soul_slug: null })
+    expect(store.effectiveState.soul.slug).toBeNull()
   })
 
-  test('drop errors when no active soul', async () => {
-    await setState({ backend: 'claude' })
-    const { exitCode, parsed } = await run(soul, ['drop', '--format', 'json'])
-    expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('NO_ACTIVE_SOUL')
+  test('drop succeeds even when no active soul', async () => {
+    const { parsed } = await run(soul, ['drop', '--format', 'json'])
+    expect(parsed.deactivated).toBe(true)
   })
 })
 
@@ -436,7 +560,7 @@ describe('persona commands', () => {
 
   test('show returns active persona with bundled rules', async () => {
     seedPersona('coder', '# Coder\n\nShip it.', ['security'])
-    await setState({ persona: 'coder', backend: 'claude' })
+    setState({ persona: 'coder' })
     const { parsed } = await run(persona, ['show', '--format', 'json'])
     expect(parsed.active).toBe(true)
     expect(parsed.name).toBe('coder')
@@ -445,22 +569,19 @@ describe('persona commands', () => {
 
   test('use activates persona', async () => {
     seedPersona('coder', '# Coder')
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(persona, ['use', 'coder', '--local', '--format', 'json'])
+    const { parsed } = await run(persona, ['use', 'coder', '--project', '--format', 'json'])
     expect(parsed.activated).toBe('coder')
   })
 
   test('use with bundled rules activates rules too', async () => {
     seedPersona('coder', '# Coder', ['security'])
     seedRule('security', '# Security')
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(persona, ['use', 'coder', '--local', '--format', 'json'])
+    const { parsed } = await run(persona, ['use', 'coder', '--project', '--format', 'json'])
     expect(parsed.activated).toBe('coder')
     expect(parsed.rules).toEqual(['security'])
   })
 
   test('use rejects missing persona', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(persona, ['use', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('PERSONA_NOT_FOUND')
@@ -468,27 +589,22 @@ describe('persona commands', () => {
 
   test('drop deactivates active persona', async () => {
     seedPersona('coder', '# Coder')
-    await setState({ persona: 'coder', backend: 'claude' })
-    const { parsed } = await run(persona, ['drop', '--local', '--format', 'json'])
+    setState({ persona: 'coder' })
+    const { parsed } = await run(persona, ['drop', '--project', '--format', 'json'])
     expect(parsed.deactivated).toBe(true)
   })
 
-  test('drop --local removes key from local state instead of nullifying', async () => {
+  test('drop sends null persona mutation to server', async () => {
     seedPersona('coder', '# Coder')
-    await setState({ persona: 'coder', backend: 'claude' })
-    await run(persona, ['use', 'coder', '--local', '--format', 'json'])
-    let local = await readLocalState()
-    expect('persona' in local).toBe(true)
-    await run(persona, ['drop', '--local', '--format', 'json'])
-    local = await readLocalState()
-    expect('persona' in local).toBe(false)
+    setState({ persona: 'coder' })
+    await run(persona, ['drop', '--format', 'json'])
+    expect(store.lastMutation).toEqual({ persona_slug: null })
+    expect(store.effectiveState.persona.slug).toBeNull()
   })
 
-  test('drop errors when no active persona', async () => {
-    await setState({ backend: 'claude' })
-    const { exitCode, parsed } = await run(persona, ['drop', '--format', 'json'])
-    expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('NO_ACTIVE_PERSONA')
+  test('drop succeeds even when no active persona', async () => {
+    const { parsed } = await run(persona, ['drop', '--format', 'json'])
+    expect(parsed.deactivated).toBe(true)
   })
 })
 
@@ -527,7 +643,7 @@ describe('rules commands', () => {
   test('list returns available and active rules', async () => {
     seedRule('security', '# Security')
     seedRule('default', '# Boundaries')
-    await setState({ rules: ['security'], backend: 'claude' })
+    setState({ rules: ['security'] })
     const { parsed } = await run(rules, ['list', '--format', 'json'])
     expect(parsed.active).toEqual(['security'])
     expect(parsed.available).toContain('security')
@@ -536,30 +652,28 @@ describe('rules commands', () => {
 
   test('add activates a rule', async () => {
     seedRule('security', '# Security')
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(rules, ['add', 'security', '--local', '--format', 'json'])
+    const { parsed } = await run(rules, ['add', 'security', '--project', '--format', 'json'])
     expect(parsed.activated).toBe('security')
   })
 
   test('add rejects missing rule', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(rules, ['add', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('RULE_NOT_FOUND')
   })
 
-  test('remove deactivates a rule', async () => {
+  test('remove sends rules_to_remove mutation', async () => {
     seedRule('security', '# Security')
-    await setState({ rules: ['security'], backend: 'claude' })
-    const { parsed } = await run(rules, ['remove', 'security', '--local', '--format', 'json'])
+    setState({ rules: ['security'] })
+    const { parsed } = await run(rules, ['remove', 'security', '--project', '--format', 'json'])
     expect(parsed.removed).toBe('security')
   })
 
-  test('remove errors on inactive rule', async () => {
-    await setState({ rules: [], backend: 'claude' })
-    const { exitCode, parsed } = await run(rules, ['remove', 'ghost', '--format', 'json'])
-    expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('RULE_NOT_ACTIVE')
+  test('remove sends mutation even for inactive rule', async () => {
+    // The command no longer validates active status — it sends the mutation
+    // and the server handles it
+    const { parsed } = await run(rules, ['remove', 'ghost', '--format', 'json'])
+    expect(parsed.removed).toBe('ghost')
   })
 })
 
@@ -570,65 +684,30 @@ describe('status command', () => {
   afterEach(teardown)
 
   test('returns null for all layers when empty', async () => {
-    await setState({ backend: 'claude' })
     const { parsed } = await run(status, ['--format', 'json'])
-    expect(parsed.soul).toEqual({ value: null, scope: 'global' })
-    expect(parsed.persona).toEqual({ value: null, scope: 'global' })
+    expect(parsed.soul).toEqual({ slug: null, scope: 'workspace' })
+    expect(parsed.persona).toEqual({ slug: null, scope: 'workspace' })
     expect(parsed.rules).toEqual([])
   })
 
   test('returns active layers with scope annotations', async () => {
-    await setState({ soul: 'warrior', persona: null, rules: ['security'], backend: 'claude' })
+    setState({ soul: 'warrior', persona: null, rules: ['security'] })
     const { parsed } = await run(status, ['--format', 'json'])
-    expect(parsed.soul).toEqual({ value: 'warrior', scope: 'global' })
-    expect(parsed.rules).toEqual([{ value: 'security', scope: 'global' }])
+    expect(parsed.soul).toEqual({ slug: 'warrior', scope: 'workspace' })
+    expect(parsed.rules).toEqual([{ slug: 'security', scope: 'workspace' }])
   })
 
-  test('--global shows only global state', async () => {
-    await setState({ soul: 'warrior', backend: 'claude' })
-    const { parsed } = await run(status, ['--global', '--format', 'json'])
+  test('--workspace shows only workspace state', async () => {
+    setState({ soul: 'warrior' })
+    store.workspaceOverride = { soul_slug: 'warrior', persona_slug: null, rule_slugs: [] }
+    const { parsed } = await run(status, ['--workspace', '--format', 'json'])
     expect(parsed.soul).toBe('warrior')
     expect(parsed.persona).toBeNull()
   })
 
-  test('--local shows only local overrides', async () => {
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(status, ['--local', '--format', 'json'])
-    expect(parsed.note).toBe('No local overrides')
-  })
-
-  test('env vars override effective state with env scope', async () => {
-    await setState({ soul: 'warrior', backend: 'claude' })
-    process.env.BRAINJAR_SOUL = 'paranoid'
-    try {
-      const { parsed } = await run(status, ['--format', 'json'])
-      expect(parsed.soul).toEqual({ value: 'paranoid', scope: 'env' })
-    } finally {
-      delete process.env.BRAINJAR_SOUL
-    }
-  })
-
-  test('env vars do not affect --global output', async () => {
-    await setState({ soul: 'warrior', backend: 'claude' })
-    process.env.BRAINJAR_SOUL = 'paranoid'
-    try {
-      const { parsed } = await run(status, ['--global', '--format', 'json'])
-      expect(parsed.soul).toBe('warrior')
-    } finally {
-      delete process.env.BRAINJAR_SOUL
-    }
-  })
-
-  test('env rules add shows +env scope', async () => {
-    await setState({ rules: ['security'], backend: 'claude' })
-    process.env.BRAINJAR_RULES_ADD = 'strict'
-    try {
-      const { parsed } = await run(status, ['--format', 'json'])
-      const strictRule = parsed.rules.find((r: any) => r.value === 'strict')
-      expect(strictRule).toEqual({ value: 'strict', scope: '+env' })
-    } finally {
-      delete process.env.BRAINJAR_RULES_ADD
-    }
+  test('--project shows only project overrides', async () => {
+    const { parsed } = await run(status, ['--project', '--format', 'json'])
+    expect(parsed.note).toBe('No project overrides')
   })
 })
 
@@ -649,7 +728,15 @@ describe('init command', () => {
     origCwd = process.cwd()
     process.chdir(backendDir)
 
-    const { parsed } = await run(init, ['--backend', 'claude', '--format', 'json'])
+    // Write config so init can reach mock server
+    await mkdir(brainjarDir, { recursive: true })
+    await writeFile(
+      join(brainjarDir, 'config.yaml'),
+      `server:\n  url: ${mockServerUrl}\n  mode: remote\nworkspace: test\n`,
+    )
+    resetStore()
+
+    const { parsed } = await run(init, ['--format', 'json'])
     expect(parsed.created).toBe(brainjarDir)
     expect(parsed.directories).toContain('souls/')
 
@@ -659,9 +746,6 @@ describe('init command', () => {
 
     const gitignore = await readFile(join(brainjarDir, '.gitignore'), 'utf-8')
     expect(gitignore).toContain('state.yaml')
-
-    const state = await readState()
-    expect(state.backend).toBe('claude')
   })
 })
 
@@ -719,7 +803,7 @@ describe('brain commands', () => {
   afterEach(teardown)
 
   test('save snapshots current effective state', async () => {
-    await setState({ soul: 'craftsman', persona: 'reviewer', rules: ['default', 'security'], backend: 'claude' })
+    setState({ soul: 'craftsman', persona: 'reviewer', rules: ['default', 'security'] })
     const { parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(parsed.saved).toBe('review')
     expect(parsed.soul).toBe('craftsman')
@@ -730,7 +814,7 @@ describe('brain commands', () => {
 
   test('save rejects duplicate without --overwrite', async () => {
     seedBrain('review', 'x', 'y')
-    await setState({ soul: 'x', persona: 'y', rules: [], backend: 'claude' })
+    setState({ soul: 'x', persona: 'y', rules: [] })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('BRAIN_EXISTS')
@@ -738,21 +822,21 @@ describe('brain commands', () => {
 
   test('save with --overwrite replaces existing', async () => {
     seedBrain('review', 'old', 'old')
-    await setState({ soul: 'craftsman', persona: 'reviewer', rules: ['security'], backend: 'claude' })
+    setState({ soul: 'craftsman', persona: 'reviewer', rules: ['security'] })
     const { parsed } = await run(brain, ['save', 'review', '--overwrite', '--format', 'json'])
     expect(parsed.saved).toBe('review')
     expect(parsed.soul).toBe('craftsman')
   })
 
   test('save errors when no active soul', async () => {
-    await setState({ persona: 'reviewer', backend: 'claude' })
+    setState({ persona: 'reviewer' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('NO_ACTIVE_SOUL')
   })
 
   test('save errors when no active persona', async () => {
-    await setState({ soul: 'craftsman', backend: 'claude' })
+    setState({ soul: 'craftsman' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('NO_ACTIVE_PERSONA')
@@ -762,28 +846,28 @@ describe('brain commands', () => {
     seedSoul('craftsman', '# Craftsman')
     seedPersona('reviewer', '# Reviewer')
     seedBrain('review', 'craftsman', 'reviewer', ['default'])
-    await setState({ backend: 'claude' })
-    const { parsed } = await run(brain, ['use', 'review', '--local', '--format', 'json'])
+    const { parsed } = await run(brain, ['use', 'review', '--project', '--format', 'json'])
     expect(parsed.activated).toBe('review')
     expect(parsed.soul).toBe('craftsman')
     expect(parsed.persona).toBe('reviewer')
     expect(parsed.rules).toEqual(['default'])
   })
 
-  test('use sets global state correctly', async () => {
+  test('use sends correct state mutation to server', async () => {
     seedSoul('craftsman', '# Craftsman')
     seedPersona('reviewer', '# Reviewer')
     seedBrain('review', 'craftsman', 'reviewer', ['security'])
-    await setState({ backend: 'claude' })
     await run(brain, ['use', 'review', '--format', 'json'])
-    const state = await readState()
-    expect(state.soul).toBe('craftsman')
-    expect(state.persona).toBe('reviewer')
-    expect(state.rules).toEqual(['security'])
+    expect(store.lastMutation).toEqual({
+      soul_slug: 'craftsman',
+      persona_slug: 'reviewer',
+      rule_slugs: ['security'],
+    })
+    expect(store.effectiveState.soul.slug).toBe('craftsman')
+    expect(store.effectiveState.persona.slug).toBe('reviewer')
   })
 
   test('use errors on missing brain', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['use', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('BRAIN_NOT_FOUND')
@@ -792,7 +876,6 @@ describe('brain commands', () => {
   test('use errors when brain references missing soul', async () => {
     seedPersona('reviewer', '# Reviewer')
     seedBrain('bad', 'ghost', 'reviewer')
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['use', 'bad', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('SOUL_NOT_FOUND')
@@ -801,7 +884,6 @@ describe('brain commands', () => {
   test('use errors when brain references missing persona', async () => {
     seedSoul('craftsman', '# Craftsman')
     seedBrain('bad', 'craftsman', 'ghost')
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(brain, ['use', 'bad', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('PERSONA_NOT_FOUND')
@@ -849,25 +931,23 @@ describe('brain commands', () => {
   })
 
   test('save rejects invalid name', async () => {
-    await setState({ soul: 'x', persona: 'y', backend: 'claude' })
+    setState({ soul: 'x', persona: 'y' })
     const { exitCode } = await run(brain, ['save', '../evil', '--format', 'json'])
     expect(exitCode).toBe(1)
   })
 })
 
-// ─── compose (brain-first) ─────────────────────────────────────────────────
-// Note: compose still uses filesystem — not converted until phase 4
+// ─── compose ──────────────────────────────────────────────────────────────────
 
 describe('compose command', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  test('compose with brain resolves all layers from brain file', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman\n\nQuality work.')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '---\nrules:\n  - ignored\n---\n\n# Reviewer\n\nFind bugs.')
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security\n\nBe safe.')
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules:\n  - security\n')
-    await setState({ backend: 'claude' })
+  test('compose with brain resolves all layers via server', async () => {
+    seedSoul('craftsman', '# Craftsman\n\nQuality work.')
+    seedPersona('reviewer', '# Reviewer\n\nFind bugs.')
+    seedRule('security', '# Security\n\nBe safe.')
+    seedBrain('review', 'craftsman', 'reviewer', ['security'])
     const { parsed } = await run(compose, ['review', '--format', 'json'])
     expect(parsed.brain).toBe('review')
     expect(parsed.soul).toBe('craftsman')
@@ -879,21 +959,19 @@ describe('compose command', () => {
   })
 
   test('compose with brain + task appends task section', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules: []\n')
-    await setState({ backend: 'claude' })
+    seedSoul('craftsman', '# Craftsman')
+    seedPersona('reviewer', '# Reviewer')
+    seedBrain('review', 'craftsman', 'reviewer', [])
     const { parsed } = await run(compose, ['review', '--task', 'Review auth changes', '--format', 'json'])
     expect(parsed.prompt).toContain('# Task')
     expect(parsed.prompt).toContain('Review auth changes')
   })
 
   test('compose with --persona uses ad-hoc path', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman\n\nQuality.')
-    await writeFile(join(brainjarDir, 'personas', 'architect.md'), '---\nrules:\n  - default\n---\n\n# Architect\n\nDesign.')
-    await mkdir(join(brainjarDir, 'rules', 'default'))
-    await writeFile(join(brainjarDir, 'rules', 'default', 'boundaries.md'), '# Boundaries')
-    await setState({ soul: 'craftsman', backend: 'claude' })
+    seedSoul('craftsman', '# Craftsman\n\nQuality.')
+    seedPersona('architect', '# Architect\n\nDesign.', ['default'])
+    seedRule('default', '# Boundaries')
+    setState({ soul: 'craftsman' })
     const { parsed } = await run(compose, ['--persona', 'architect', '--format', 'json'])
     expect(parsed.brain).toBeUndefined()
     expect(parsed.soul).toBe('craftsman')
@@ -904,51 +982,44 @@ describe('compose command', () => {
   })
 
   test('compose errors on brain + --persona (mutually exclusive)', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(compose, ['review', '--persona', 'architect', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('MUTUALLY_EXCLUSIVE')
   })
 
   test('compose errors when neither brain nor --persona given', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(compose, ['--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('MISSING_ARG')
   })
 
-  test('compose with brain uses brain rules, not persona frontmatter rules', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '---\nrules:\n  - persona-rule\n---\n\n# Reviewer')
-    await writeFile(join(brainjarDir, 'rules', 'brain-rule.md'), '# Brain Rule\n\nFrom brain.')
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules:\n  - brain-rule\n')
-    await setState({ backend: 'claude' })
+  test('compose with brain uses brain rules, not persona bundled rules', async () => {
+    seedSoul('craftsman', '# Craftsman')
+    seedPersona('reviewer', '# Reviewer', ['persona-rule'])
+    seedRule('brain-rule', '# Brain Rule\n\nFrom brain.')
+    seedBrain('review', 'craftsman', 'reviewer', ['brain-rule'])
     const { parsed } = await run(compose, ['review', '--format', 'json'])
     expect(parsed.rules).toEqual(['brain-rule'])
     expect(parsed.prompt).toContain('From brain')
-    expect(parsed.prompt).not.toContain('persona-rule')
   })
 
   test('compose with missing brain errors clearly', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(compose, ['nonexistent', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('BRAIN_NOT_FOUND')
   })
 
   test('compose ad-hoc with no active soul omits soul section', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'architect.md'), '# Architect\n\nDesign.')
-    await setState({ backend: 'claude' })
+    seedPersona('architect', '# Architect\n\nDesign.')
     const { parsed } = await run(compose, ['--persona', 'architect', '--format', 'json'])
     expect(parsed.soul).toBeUndefined()
     expect(parsed.prompt).toContain('Design')
   })
 
   test('compose warns on missing rule but still assembles prompt', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'craftsman.md'), '# Craftsman')
-    await writeFile(join(brainjarDir, 'personas', 'reviewer.md'), '# Reviewer')
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: craftsman\npersona: reviewer\nrules:\n  - nonexistent\n')
-    await setState({ backend: 'claude' })
+    seedSoul('craftsman', '# Craftsman')
+    seedPersona('reviewer', '# Reviewer')
+    seedBrain('review', 'craftsman', 'reviewer', ['nonexistent'])
     const { parsed } = await run(compose, ['review', '--format', 'json'])
     expect(parsed.warnings[0]).toContain('Rule "nonexistent" not found')
     expect(parsed.prompt).toContain('Craftsman')
@@ -962,18 +1033,16 @@ describe('shell --brain', () => {
   afterEach(teardown)
 
   test('--brain with individual flags errors as mutually exclusive', async () => {
-    await writeFile(join(brainjarDir, 'brains', 'review.yaml'), 'soul: x\npersona: y\nrules: []\n')
-    await setState({ backend: 'claude' })
+    seedBrain('review', 'x', 'y', [])
     const { exitCode, parsed } = await run(shell, ['--brain', 'review', '--soul', 'other', '--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('MUTUALLY_EXCLUSIVE')
   })
 
   test('--brain with missing brain errors', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(shell, ['--brain', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('BRAIN_NOT_FOUND')
+    expect(parsed.code).toBe('NOT_FOUND')
   })
 })
 
@@ -1005,48 +1074,38 @@ describe('shell command', () => {
   })
 
   test('errors with NO_OVERRIDES when no flags provided', async () => {
-    await setState({ backend: 'claude' })
     const { exitCode, parsed } = await run(shell, ['--format', 'json'])
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe('NO_OVERRIDES')
   })
 
   test('--soul spawns subshell with BRAINJAR_SOUL env', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior\n\nBold and brave.')
-    await setState({ backend: 'claude' })
+    seedSoul('warrior', '# Warrior\n\nBold and brave.')
     const { exitCode, parsed } = await run(shell, ['--soul', 'warrior', '--format', 'json'])
     expect(exitCode).toBeUndefined()
-    expect(parsed.env.BRAINJAR_SOUL).toBe('warrior')
     expect(parsed.shell).toBe('/usr/bin/true')
     expect(parsed.exitCode).toBe(0)
   })
 
   test('--persona spawns subshell with BRAINJAR_PERSONA env', async () => {
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# Coder\n\nShip it.')
-    await setState({ backend: 'claude' })
+    seedPersona('coder', '# Coder\n\nShip it.')
     const { exitCode, parsed } = await run(shell, ['--persona', 'coder', '--format', 'json'])
     expect(exitCode).toBeUndefined()
-    expect(parsed.env.BRAINJAR_PERSONA).toBe('coder')
     expect(parsed.exitCode).toBe(0)
   })
 
   test('--rules-add spawns subshell with BRAINJAR_RULES_ADD env', async () => {
-    await writeFile(join(brainjarDir, 'rules', 'security.md'), '# Security')
-    await setState({ backend: 'claude' })
+    seedRule('security', '# Security')
     const { exitCode, parsed } = await run(shell, ['--rules-add', 'security', '--format', 'json'])
     expect(exitCode).toBeUndefined()
-    expect(parsed.env.BRAINJAR_RULES_ADD).toBe('security')
     expect(parsed.exitCode).toBe(0)
   })
 
   test('multiple overrides sets all env vars', async () => {
-    await writeFile(join(brainjarDir, 'souls', 'warrior.md'), '# Warrior')
-    await writeFile(join(brainjarDir, 'personas', 'coder.md'), '# Coder')
-    await setState({ backend: 'claude' })
+    seedSoul('warrior', '# Warrior')
+    seedPersona('coder', '# Coder')
     const { exitCode, parsed } = await run(shell, ['--soul', 'warrior', '--persona', 'coder', '--format', 'json'])
     expect(exitCode).toBeUndefined()
-    expect(parsed.env.BRAINJAR_SOUL).toBe('warrior')
-    expect(parsed.env.BRAINJAR_PERSONA).toBe('coder')
     expect(parsed.exitCode).toBe(0)
   })
 })

@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { rm, mkdir, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { healthCheck, status } from './daemon.js'
+import { healthCheck, status } from '../src/daemon.js'
 
 const TEST_HOME = join(import.meta.dir, '..', '.test-home-daemon')
 let server: ReturnType<typeof Bun.serve> | null = null

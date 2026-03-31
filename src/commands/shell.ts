@@ -1,25 +1,23 @@
 import { Cli, z, Errors } from 'incur'
+import { randomUUID } from 'node:crypto'
 
 const { IncurError } = Errors
 import { spawn } from 'node:child_process'
-import { access } from 'node:fs/promises'
-import { requireBrainjarDir } from '../state.js'
+import { putState } from '../state.js'
 import { sync } from '../sync.js'
-import { getLocalDir } from '../paths.js'
-import { readBrain } from '../brain.js'
+import { getApi } from '../client.js'
+import type { ApiBrain } from '../api-types.js'
 
 export const shell = Cli.create('shell', {
-  description: 'Spawn a subshell with BRAINJAR_* env vars set',
+  description: 'Spawn a subshell with session-scoped state overrides',
   options: z.object({
-    brain: z.string().optional().describe('Brain name — sets soul, persona, and rules from brain file'),
+    brain: z.string().optional().describe('Brain name — sets soul, persona, and rules from brain'),
     soul: z.string().optional().describe('Soul override for this session'),
     persona: z.string().optional().describe('Persona override for this session'),
     'rules-add': z.string().optional().describe('Comma-separated rules to add'),
     'rules-remove': z.string().optional().describe('Comma-separated rules to remove'),
   }),
   async run(c) {
-    await requireBrainjarDir()
-
     const individualFlags = c.options.soul || c.options.persona
       || c.options['rules-add'] || c.options['rules-remove']
 
@@ -31,23 +29,7 @@ export const shell = Cli.create('shell', {
       })
     }
 
-    const envOverrides: Record<string, string> = {}
-
-    if (c.options.brain) {
-      const config = await readBrain(c.options.brain)
-      envOverrides.BRAINJAR_SOUL = config.soul
-      envOverrides.BRAINJAR_PERSONA = config.persona
-      if (config.rules.length > 0) {
-        envOverrides.BRAINJAR_RULES_ADD = config.rules.join(',')
-      }
-    } else {
-      if (c.options.soul) envOverrides.BRAINJAR_SOUL = c.options.soul
-      if (c.options.persona) envOverrides.BRAINJAR_PERSONA = c.options.persona
-      if (c.options['rules-add']) envOverrides.BRAINJAR_RULES_ADD = c.options['rules-add']
-      if (c.options['rules-remove']) envOverrides.BRAINJAR_RULES_REMOVE = c.options['rules-remove']
-    }
-
-    if (Object.keys(envOverrides).length === 0) {
+    if (!c.options.brain && !individualFlags) {
       throw new IncurError({
         code: 'NO_OVERRIDES',
         message: 'No overrides specified.',
@@ -55,45 +37,73 @@ export const shell = Cli.create('shell', {
       })
     }
 
-    // Sync with env overrides passed explicitly (no process.env mutation)
-    const hasLocal = await access(getLocalDir()).then(() => true, () => false)
-    await sync({ envOverrides })
-    if (hasLocal) await sync({ local: true, envOverrides })
+    // Create a unique session ID
+    const sessionId = randomUUID()
+    const api = await getApi({ session: sessionId })
+
+    // Build session-scoped state mutation
+    const mutation: Record<string, unknown> = {}
+    const labels: string[] = []
+
+    if (c.options.brain) {
+      const config = await api.get<ApiBrain>(`/api/v1/brains/${c.options.brain}`)
+      mutation.soul_slug = config.soul_slug
+      mutation.persona_slug = config.persona_slug
+      mutation.rule_slugs = config.rule_slugs
+      labels.push(`brain: ${c.options.brain}`)
+    } else {
+      if (c.options.soul) {
+        mutation.soul_slug = c.options.soul
+        labels.push(`soul: ${c.options.soul}`)
+      }
+      if (c.options.persona) {
+        mutation.persona_slug = c.options.persona
+        labels.push(`persona: ${c.options.persona}`)
+      }
+      if (c.options['rules-add']) {
+        mutation.rules_to_add = c.options['rules-add'].split(',').map(s => s.trim())
+        labels.push(`+rules: ${c.options['rules-add']}`)
+      }
+      if (c.options['rules-remove']) {
+        mutation.rules_to_remove = c.options['rules-remove'].split(',').map(s => s.trim())
+        labels.push(`-rules: ${c.options['rules-remove']}`)
+      }
+    }
+
+    // Apply session-scoped state on server
+    await putState(api, mutation)
+
+    // Sync CLAUDE.md with session state
+    await sync({ api })
 
     // Print active config banner
-    const labels: string[] = []
-    if (envOverrides.BRAINJAR_SOUL) labels.push(`soul: ${envOverrides.BRAINJAR_SOUL}`)
-    if (envOverrides.BRAINJAR_PERSONA) labels.push(`persona: ${envOverrides.BRAINJAR_PERSONA}`)
-    if (envOverrides.BRAINJAR_RULES_ADD) labels.push(`+rules: ${envOverrides.BRAINJAR_RULES_ADD}`)
-    if (envOverrides.BRAINJAR_RULES_REMOVE) labels.push(`-rules: ${envOverrides.BRAINJAR_RULES_REMOVE}`)
-
     if (!c.agent) {
       const banner = `[brainjar] ${labels.join(' | ')}`
       process.stderr.write(`${banner}\n`)
       process.stderr.write(`${'─'.repeat(banner.length)}\n`)
     }
 
-    // Spawn subshell with overrides
+    // Spawn subshell with session ID so nested brainjar commands use the session
     const userShell = process.env.SHELL || '/bin/sh'
     const child = spawn(userShell, [], {
       stdio: 'inherit',
-      env: { ...process.env, ...envOverrides },
+      env: { ...process.env, BRAINJAR_SESSION: sessionId },
     })
 
     return new Promise((resolve, reject) => {
       child.on('exit', async (code) => {
-        // Re-sync without env overrides to restore config
+        // Clear session state and re-sync to restore
         let syncWarning: string | undefined
         try {
-          await sync()
-          if (hasLocal) await sync({ local: true })
+          const cleanApi = await getApi()
+          await sync({ api: cleanApi })
         } catch (err) {
           syncWarning = `Re-sync on exit failed: ${(err as Error).message}`
         }
 
         const result = {
           shell: userShell,
-          env: envOverrides,
+          session: sessionId,
           exitCode: code ?? 0,
           ...(syncWarning ? { warning: syncWarning } : {}),
         }

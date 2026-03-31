@@ -1,19 +1,9 @@
 import { Cli, z, Errors } from 'incur'
+import { basename } from 'node:path'
 
 const { IncurError } = Errors
-import {
-  readState,
-  writeState,
-  withStateLock,
-  readLocalState,
-  writeLocalState,
-  withLocalStateLock,
-  readEnvState,
-  mergeState,
-  requireBrainjarDir,
-  normalizeSlug,
-} from '../state.js'
-// sync removed — reintroduced in phase 3 when sync is converted to server API
+import { normalizeSlug, getEffectiveState, putState } from '../state.js'
+import { sync } from '../sync.js'
 import { getApi } from '../client.js'
 import type { ApiBrain, ApiBrainList, ApiSoul, ApiPersona } from '../api-types.js'
 
@@ -29,7 +19,6 @@ export const brain = Cli.create('brain', {
       overwrite: z.boolean().default(false).describe('Overwrite existing brain'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'brain name')
       const api = await getApi()
 
@@ -48,13 +37,9 @@ export const brain = Cli.create('brain', {
         }
       }
 
-      // Read effective state (still filesystem-based until phase 3)
-      const globalState = await readState()
-      const localState = await readLocalState()
-      const envState = readEnvState()
-      const effective = mergeState(globalState, localState, envState)
+      const effective = await getEffectiveState(api)
 
-      if (!effective.soul.value) {
+      if (!effective.soul.slug) {
         throw new IncurError({
           code: 'NO_ACTIVE_SOUL',
           message: 'Cannot save brain: no active soul.',
@@ -62,7 +47,7 @@ export const brain = Cli.create('brain', {
         })
       }
 
-      if (!effective.persona.value) {
+      if (!effective.persona.slug) {
         throw new IncurError({
           code: 'NO_ACTIVE_PERSONA',
           message: 'Cannot save brain: no active persona.',
@@ -72,18 +57,18 @@ export const brain = Cli.create('brain', {
 
       const activeRules = effective.rules
         .filter(r => !r.scope.startsWith('-'))
-        .map(r => r.value)
+        .map(r => r.slug)
 
       await api.put<ApiBrain>(`/api/v1/brains/${name}`, {
-        soul_slug: effective.soul.value,
-        persona_slug: effective.persona.value,
+        soul_slug: effective.soul.slug,
+        persona_slug: effective.persona.slug,
         rule_slugs: activeRules,
       })
 
       return {
         saved: name,
-        soul: effective.soul.value,
-        persona: effective.persona.value,
+        soul: effective.soul.slug,
+        persona: effective.persona.slug,
         rules: activeRules,
       }
     },
@@ -94,10 +79,9 @@ export const brain = Cli.create('brain', {
       name: z.string().describe('Brain name to activate'),
     }),
     options: z.object({
-      local: z.boolean().default(false).describe('Apply brain at project scope'),
+      project: z.boolean().default(false).describe('Apply brain at project scope'),
     }),
     async run(c) {
-      await requireBrainjarDir()
       const name = normalizeSlug(c.args.name, 'brain name')
       const api = await getApi()
 
@@ -143,29 +127,21 @@ export const brain = Cli.create('brain', {
         throw e
       }
 
-      if (c.options.local) {
-        await withLocalStateLock(async () => {
-          const local = await readLocalState()
-          local.soul = config.soul_slug
-          local.persona = config.persona_slug
-          local.rules = { add: config.rule_slugs, remove: [] }
-          await writeLocalState(local)
-          // sync() removed — phase 3
-        })
-      } else {
-        await withStateLock(async () => {
-          const state = await readState()
-          state.soul = config.soul_slug
-          state.persona = config.persona_slug
-          state.rules = config.rule_slugs
-          await writeState(state)
-          // sync() removed — phase 3
-        })
-      }
+      const mutationOpts = c.options.project
+        ? { project: basename(process.cwd()) }
+        : undefined
+      await putState(api, {
+        soul_slug: config.soul_slug,
+        persona_slug: config.persona_slug,
+        rule_slugs: config.rule_slugs,
+      }, mutationOpts)
+
+      await sync({ api })
+      if (c.options.project) await sync({ api, project: true })
 
       return {
         activated: name,
-        local: c.options.local,
+        project: c.options.project,
         soul: config.soul_slug,
         persona: config.persona_slug,
         rules: config.rule_slugs,
