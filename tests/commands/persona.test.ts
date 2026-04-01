@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { persona } from '../../src/commands/persona.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run, setState, seedPersona, seedRule, store,
@@ -29,14 +30,14 @@ describe('persona commands', () => {
   test('create rejects invalid bundled rules', async () => {
     const { exitCode, parsed } = await run(persona, ['create', 'bad', '--rules', 'nonexistent', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('RULES_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.RULES_NOT_FOUND)
   })
 
   test('create rejects duplicate', async () => {
     seedPersona('coder', '# coder')
     const { exitCode, parsed } = await run(persona, ['create', 'coder', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('PERSONA_EXISTS')
+    expect(parsed.code).toBe(ErrorCode.PERSONA_EXISTS)
   })
 
   test('list returns available personas', async () => {
@@ -58,7 +59,7 @@ describe('persona commands', () => {
   test('show errors on missing named persona', async () => {
     const { exitCode, parsed } = await run(persona, ['show', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('PERSONA_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.PERSONA_NOT_FOUND)
   })
 
   test('show returns active persona with bundled rules', async () => {
@@ -87,7 +88,7 @@ describe('persona commands', () => {
   test('use rejects missing persona', async () => {
     const { exitCode, parsed } = await run(persona, ['use', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('PERSONA_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.PERSONA_NOT_FOUND)
   })
 
   test('drop deactivates active persona', async () => {

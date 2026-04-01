@@ -4,6 +4,7 @@ import { readConfig } from './config.js'
 import { getLocalDir } from './paths.js'
 import { access } from 'node:fs/promises'
 import { ensureRunning } from './daemon.js'
+import { ErrorCode, createError } from './errors.js'
 
 const { IncurError } = Errors
 
@@ -28,15 +29,15 @@ export interface BrainjarClient {
   delete<T>(path: string, options?: RequestOptions): Promise<T>
 }
 
-const ERROR_MAP: Record<number, { code: string; hint?: string }> = {
-  400: { code: 'BAD_REQUEST' },
-  401: { code: 'UNAUTHORIZED', hint: 'Check your server configuration.' },
-  404: { code: 'NOT_FOUND' },
-  409: { code: 'CONFLICT' },
-  422: { code: 'VALIDATION_ERROR' },
-  500: { code: 'SERVER_ERROR', hint: 'Check server logs at ~/.brainjar/server.log' },
-  502: { code: 'SERVER_ERROR', hint: 'Server may be starting up. Try again.' },
-  503: { code: 'SERVER_UNAVAILABLE', hint: 'Server is not ready. Try again in a moment.' },
+const ERROR_MAP: Record<number, { code: ErrorCode; hint?: string }> = {
+  400: { code: ErrorCode.BAD_REQUEST },
+  401: { code: ErrorCode.UNAUTHORIZED, hint: 'Check your server configuration.' },
+  404: { code: ErrorCode.NOT_FOUND },
+  409: { code: ErrorCode.CONFLICT },
+  422: { code: ErrorCode.VALIDATION_ERROR },
+  500: { code: ErrorCode.SERVER_ERROR, hint: 'Check server logs at ~/.brainjar/server.log' },
+  502: { code: ErrorCode.SERVER_ERROR, hint: 'Server may be starting up. Try again.' },
+  503: { code: ErrorCode.SERVER_UNAVAILABLE, hint: 'Server is not ready. Try again in a moment.' },
 }
 
 async function detectProject(explicit?: string): Promise<string | null> {
@@ -88,17 +89,15 @@ export async function createClient(options?: ClientOptions): Promise<BrainjarCli
       })
     } catch (e) {
       if (e instanceof DOMException && e.name === 'TimeoutError') {
-        throw new IncurError({
-          code: 'TIMEOUT',
+        throw createError(ErrorCode.TIMEOUT, {
           message: `Request timed out after ${timeout}ms`,
         })
       }
       const hint = mode === 'local'
         ? "Run 'brainjar server start' or 'brainjar init'."
         : `Check the URL or run 'brainjar server remote <url>'.`
-      throw new IncurError({
-        code: 'SERVER_UNREACHABLE',
-        message: `Cannot reach server at ${serverUrl}`,
+      throw createError(ErrorCode.SERVER_UNREACHABLE, {
+        params: [serverUrl],
         hint,
       })
     }
@@ -110,7 +109,7 @@ export async function createClient(options?: ClientOptions): Promise<BrainjarCli
       } catch {}
 
       const mapped = ERROR_MAP[response.status]
-      const code = serverError?.code ?? mapped?.code ?? 'API_ERROR'
+      const code = serverError?.code ?? mapped?.code ?? ErrorCode.API_ERROR
       const message = serverError?.error ?? `Server returned ${response.status}`
       const hint = mapped?.hint
 

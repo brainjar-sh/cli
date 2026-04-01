@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } fr
 import { rm, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createClient } from '../src/client.js'
+import { ErrorCode } from '../src/errors.js'
 
 const TEST_HOME = join(import.meta.dir, '..', '.test-home-client')
 let server: ReturnType<typeof Bun.serve> | null = null
@@ -96,7 +97,7 @@ describe('createClient', () => {
       await api.get('/api/v1/not-found')
       expect(true).toBe(false) // should not reach
     } catch (e: any) {
-      expect(e.code).toBe('SOUL_NOT_FOUND')
+      expect(e.code).toBe(ErrorCode.SOUL_NOT_FOUND)
       expect(e.message).toContain('Not found')
     }
   })
@@ -107,7 +108,7 @@ describe('createClient', () => {
       await api.get('/api/v1/server-error')
       expect(true).toBe(false)
     } catch (e: any) {
-      expect(e.code).toBe('SERVER_ERROR')
+      expect(e.code).toBe(ErrorCode.SERVER_ERROR)
     }
   })
 
@@ -117,7 +118,7 @@ describe('createClient', () => {
       await api.get('/api/v1/slow')
       expect(true).toBe(false)
     } catch (e: any) {
-      expect(e.code).toBe('TIMEOUT')
+      expect(e.code).toBe(ErrorCode.TIMEOUT)
     }
   })
 
@@ -131,7 +132,7 @@ describe('createClient', () => {
       await api.get('/api/v1/souls')
       expect(true).toBe(false)
     } catch (e: any) {
-      expect(e.code).toBe('SERVER_UNREACHABLE')
+      expect(e.code).toBe(ErrorCode.SERVER_UNREACHABLE)
     }
   })
 })

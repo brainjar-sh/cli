@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { compose } from '../../src/commands/compose.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run, setState, seedSoul, seedPersona, seedRule, seedBrain,
@@ -53,13 +54,13 @@ describe('compose command', () => {
   test('compose errors on brain + --persona (mutually exclusive)', async () => {
     const { exitCode, parsed } = await run(compose, ['review', '--persona', 'architect', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('MUTUALLY_EXCLUSIVE')
+    expect(parsed.code).toBe(ErrorCode.MUTUALLY_EXCLUSIVE)
   })
 
   test('compose errors when neither brain nor --persona given', async () => {
     const { exitCode, parsed } = await run(compose, ['--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('MISSING_ARG')
+    expect(parsed.code).toBe(ErrorCode.MISSING_ARG)
   })
 
   test('compose with brain uses brain rules, not persona bundled rules', async () => {
@@ -75,7 +76,7 @@ describe('compose command', () => {
   test('compose with missing brain errors clearly', async () => {
     const { exitCode, parsed } = await run(compose, ['nonexistent', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('BRAIN_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.BRAIN_NOT_FOUND)
   })
 
   test('compose ad-hoc with no active soul omits soul section', async () => {

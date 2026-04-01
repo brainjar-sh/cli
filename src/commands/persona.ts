@@ -2,6 +2,7 @@ import { Cli, z, Errors } from 'incur'
 import { basename } from 'node:path'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
@@ -26,14 +27,10 @@ export const persona = Cli.create('persona', {
       // Check if it already exists
       try {
         await api.get<ApiPersona>(`/api/v1/personas/${name}`)
-        throw new IncurError({
-          code: 'PERSONA_EXISTS',
-          message: `Persona "${name}" already exists.`,
-          hint: 'Choose a different name or edit the existing persona.',
-        })
+        throw createError(ErrorCode.PERSONA_EXISTS, { params: [name] })
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'PERSONA_EXISTS') throw e
-        if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
+        if (e instanceof IncurError && e.code === ErrorCode.PERSONA_EXISTS) throw e
+        if (e instanceof IncurError && e.code !== ErrorCode.NOT_FOUND) throw e
       }
 
       const rulesList = c.options.rules ?? []
@@ -44,8 +41,7 @@ export const persona = Cli.create('persona', {
         const availableSlugs = available.rules.map(r => r.slug)
         const invalid = rulesList.filter(r => !availableSlugs.includes(r))
         if (invalid.length > 0) {
-          throw new IncurError({
-            code: 'RULES_NOT_FOUND',
+          throw createError(ErrorCode.RULES_NOT_FOUND, {
             message: `Rules not found: ${invalid.join(', ')}`,
             hint: `Available rules: ${availableSlugs.join(', ')}`,
           })
@@ -122,12 +118,8 @@ export const persona = Cli.create('persona', {
           const p = await api.get<ApiPersona>(`/api/v1/personas/${name}`)
           return { name, title: p.title, content: p.content, rules: p.bundled_rules }
         } catch (e) {
-          if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-            throw new IncurError({
-              code: 'PERSONA_NOT_FOUND',
-              message: `Persona "${name}" not found.`,
-              hint: 'Run `brainjar persona list` to see available personas.',
-            })
+          if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+            throw createError(ErrorCode.PERSONA_NOT_FOUND, { params: [name] })
           }
           throw e
         }
@@ -174,12 +166,8 @@ export const persona = Cli.create('persona', {
       try {
         personaData = await api.get<ApiPersona>(`/api/v1/personas/${name}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'PERSONA_NOT_FOUND',
-            message: `Persona "${name}" not found.`,
-            hint: 'Run `brainjar persona list` to see available personas.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.PERSONA_NOT_FOUND, { params: [name] })
         }
         throw e
       }

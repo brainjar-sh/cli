@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { shell } from '../../src/commands/shell.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run, seedSoul, seedPersona, seedRule, seedBrain,
@@ -16,13 +17,13 @@ describe('shell --brain', () => {
     seedBrain('review', 'x', 'y', [])
     const { exitCode, parsed } = await run(shell, ['--brain', 'review', '--soul', 'other', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('MUTUALLY_EXCLUSIVE')
+    expect(parsed.code).toBe(ErrorCode.MUTUALLY_EXCLUSIVE)
   })
 
   test('--brain with missing brain errors', async () => {
     const { exitCode, parsed } = await run(shell, ['--brain', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.NOT_FOUND)
   })
 })
 
@@ -54,7 +55,7 @@ describe('shell command', () => {
   test('errors with NO_OVERRIDES when no flags provided', async () => {
     const { exitCode, parsed } = await run(shell, ['--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('NO_OVERRIDES')
+    expect(parsed.code).toBe(ErrorCode.NO_OVERRIDES)
   })
 
   test('--soul spawns subshell with BRAINJAR_SOUL env', async () => {

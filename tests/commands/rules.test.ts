@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { rules } from '../../src/commands/rules.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run, setState, seedRule, store,
@@ -22,7 +23,7 @@ describe('rules commands', () => {
     seedRule('security', '# Security')
     const { exitCode, parsed } = await run(rules, ['create', 'security', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('RULE_EXISTS')
+    expect(parsed.code).toBe(ErrorCode.RULE_EXISTS)
   })
 
   test('show returns rule content', async () => {
@@ -35,7 +36,7 @@ describe('rules commands', () => {
   test('show errors on missing rule', async () => {
     const { exitCode, parsed } = await run(rules, ['show', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('RULE_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.RULE_NOT_FOUND)
   })
 
   test('list returns available and active rules', async () => {
@@ -57,7 +58,7 @@ describe('rules commands', () => {
   test('add rejects missing rule', async () => {
     const { exitCode, parsed } = await run(rules, ['add', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('RULE_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.RULE_NOT_FOUND)
   })
 
   test('remove sends rules_to_remove mutation', async () => {

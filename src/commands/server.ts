@@ -13,13 +13,12 @@ import { getApi } from '../client.js'
 import { sync } from '../sync.js'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 
 function assertLocalMode(config: { server: { mode: string } }, action: string) {
   if (config.server.mode === 'remote') {
-    throw new IncurError({
-      code: 'INVALID_MODE',
+    throw createError(ErrorCode.INVALID_MODE, {
       message: `Server is in remote mode. Cannot ${action}.`,
-      hint: "Run 'brainjar server local' to switch to managed mode.",
     })
   }
 }
@@ -61,10 +60,8 @@ const startCmd = Cli.create('start', {
       if (check.healthy) return { started: true, pid, url: config.server.url }
     }
 
-    throw new IncurError({
-      code: 'SERVER_START_FAILED',
+    throw createError(ErrorCode.SERVER_START_FAILED, {
       message: 'Server started but failed health check after 10s.',
-      hint: `Check ${config.server.log_file}`,
     })
   },
 })
@@ -134,11 +131,7 @@ const remoteCmd = Cli.create('remote', {
 
     const health = await healthCheck({ url, timeout: 5000 })
     if (!health.healthy) {
-      throw new IncurError({
-        code: 'SERVER_UNREACHABLE',
-        message: `Cannot reach server at ${url}`,
-        hint: 'Check the URL and ensure the server is running.',
-      })
+      throw createError(ErrorCode.SERVER_UNREACHABLE, { params: [url] })
     }
 
     const config = await readConfig()

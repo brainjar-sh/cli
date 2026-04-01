@@ -1,6 +1,7 @@
 import { Cli, z, Errors } from 'incur'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 import { getApi } from '../client.js'
 import type { ApiComposeResult } from '../api-types.js'
 
@@ -19,16 +20,14 @@ export const compose = Cli.create('compose', {
 
     // Mutual exclusivity
     if (brainName && personaFlag) {
-      throw new IncurError({
-        code: 'MUTUALLY_EXCLUSIVE',
+      throw createError(ErrorCode.MUTUALLY_EXCLUSIVE, {
         message: 'Cannot specify both a brain name and --persona.',
         hint: 'Use `brainjar compose <brain>` or `brainjar compose --persona <name>`, not both.',
       })
     }
 
     if (!brainName && !personaFlag) {
-      throw new IncurError({
-        code: 'MISSING_ARG',
+      throw createError(ErrorCode.MISSING_ARG, {
         message: 'Provide a brain name or --persona.',
         hint: 'Usage: `brainjar compose <brain>` or `brainjar compose --persona <name>`.',
       })

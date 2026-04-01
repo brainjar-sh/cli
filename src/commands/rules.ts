@@ -2,6 +2,7 @@ import { Cli, z, Errors } from 'incur'
 import { basename } from 'node:path'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
@@ -26,14 +27,10 @@ export const rules = Cli.create('rules', {
       // Check if it already exists
       try {
         await api.get<ApiRule>(`/api/v1/rules/${name}`)
-        throw new IncurError({
-          code: 'RULE_EXISTS',
-          message: `Rule "${name}" already exists.`,
-          hint: 'Choose a different name or edit the existing rule.',
-        })
+        throw createError(ErrorCode.RULE_EXISTS, { params: [name] })
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'RULE_EXISTS') throw e
-        if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
+        if (e instanceof IncurError && e.code === ErrorCode.RULE_EXISTS) throw e
+        if (e instanceof IncurError && e.code !== ErrorCode.NOT_FOUND) throw e
       }
 
       const scaffold = [
@@ -104,12 +101,8 @@ export const rules = Cli.create('rules', {
         const content = rule.entries.map(e => e.content.trim()).join('\n\n')
         return { name, content }
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'RULE_NOT_FOUND',
-            message: `Rule "${name}" not found.`,
-            hint: 'Run `brainjar rules list` to see available rules.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.RULE_NOT_FOUND, { params: [name] })
         }
         throw e
       }
@@ -131,12 +124,8 @@ export const rules = Cli.create('rules', {
       try {
         await api.get<ApiRule>(`/api/v1/rules/${name}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'RULE_NOT_FOUND',
-            message: `Rule "${name}" not found.`,
-            hint: 'Run `brainjar rules list` to see available rules.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.RULE_NOT_FOUND, { params: [name] })
         }
         throw e
       }

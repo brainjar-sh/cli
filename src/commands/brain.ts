@@ -2,6 +2,7 @@ import { Cli, z, Errors } from 'incur'
 import { basename } from 'node:path'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
@@ -26,33 +27,21 @@ export const brain = Cli.create('brain', {
       if (!c.options.overwrite) {
         try {
           await api.get<ApiBrain>(`/api/v1/brains/${name}`)
-          throw new IncurError({
-            code: 'BRAIN_EXISTS',
-            message: `Brain "${name}" already exists.`,
-            hint: 'Use --overwrite to replace it, or choose a different name.',
-          })
+          throw createError(ErrorCode.BRAIN_EXISTS, { params: [name] })
         } catch (e) {
-          if (e instanceof IncurError && e.code === 'BRAIN_EXISTS') throw e
-          if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
+          if (e instanceof IncurError && e.code === ErrorCode.BRAIN_EXISTS) throw e
+          if (e instanceof IncurError && e.code !== ErrorCode.NOT_FOUND) throw e
         }
       }
 
       const effective = await getEffectiveState(api)
 
       if (!effective.soul) {
-        throw new IncurError({
-          code: 'NO_ACTIVE_SOUL',
-          message: 'Cannot save brain: no active soul.',
-          hint: 'Activate a soul first with `brainjar soul use <name>`.',
-        })
+        throw createError(ErrorCode.NO_ACTIVE_SOUL)
       }
 
       if (!effective.persona) {
-        throw new IncurError({
-          code: 'NO_ACTIVE_PERSONA',
-          message: 'Cannot save brain: no active persona.',
-          hint: 'Activate a persona first with `brainjar persona use <name>`.',
-        })
+        throw createError(ErrorCode.NO_ACTIVE_PERSONA)
       }
 
       const activeRules = effective.rules
@@ -87,12 +76,8 @@ export const brain = Cli.create('brain', {
       try {
         config = await api.get<ApiBrain>(`/api/v1/brains/${name}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'BRAIN_NOT_FOUND',
-            message: `Brain "${name}" not found.`,
-            hint: 'Run `brainjar brain list` to see available brains.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.BRAIN_NOT_FOUND, { params: [name] })
         }
         throw e
       }
@@ -101,9 +86,9 @@ export const brain = Cli.create('brain', {
       try {
         await api.get<ApiSoul>(`/api/v1/souls/${config.soul_slug}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'SOUL_NOT_FOUND',
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.SOUL_NOT_FOUND, {
+            params: [config.soul_slug],
             message: `Brain "${name}" references soul "${config.soul_slug}" which does not exist.`,
             hint: 'Create the soul first or update the brain.',
           })
@@ -115,9 +100,9 @@ export const brain = Cli.create('brain', {
       try {
         await api.get<ApiPersona>(`/api/v1/personas/${config.persona_slug}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'PERSONA_NOT_FOUND',
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.PERSONA_NOT_FOUND, {
+            params: [config.persona_slug],
             message: `Brain "${name}" references persona "${config.persona_slug}" which does not exist.`,
             hint: 'Create the persona first or update the brain.',
           })
@@ -167,12 +152,8 @@ export const brain = Cli.create('brain', {
         const config = await api.get<ApiBrain>(`/api/v1/brains/${name}`)
         return { name, soul: config.soul_slug, persona: config.persona_slug, rules: config.rule_slugs }
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'BRAIN_NOT_FOUND',
-            message: `Brain "${name}" not found.`,
-            hint: 'Run `brainjar brain list` to see available brains.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.BRAIN_NOT_FOUND, { params: [name] })
         }
         throw e
       }
@@ -190,12 +171,8 @@ export const brain = Cli.create('brain', {
       try {
         await api.delete(`/api/v1/brains/${name}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'BRAIN_NOT_FOUND',
-            message: `Brain "${name}" not found.`,
-            hint: 'Run `brainjar brain list` to see available brains.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.BRAIN_NOT_FOUND, { params: [name] })
         }
         throw e
       }

@@ -2,6 +2,7 @@ import { readFile, readdir, writeFile, access, mkdir, stat } from 'node:fs/promi
 import { join, dirname } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { Errors } from 'incur'
+import { ErrorCode, createError } from './errors.js'
 import { normalizeSlug, putState } from './state.js'
 import { sync } from './sync.js'
 import { getApi } from './client.js'
@@ -64,8 +65,7 @@ export async function exportPack(brainName: string, options: ExportOptions = {})
   const version = options.version ?? '0.1.0'
 
   if (!SEMVER_RE.test(version)) {
-    throw new IncurError({
-      code: 'PACK_INVALID_VERSION',
+    throw createError(ErrorCode.PACK_INVALID_VERSION, {
       message: `Invalid version "${version}". Expected semver (e.g., 0.1.0).`,
     })
   }
@@ -75,11 +75,7 @@ export async function exportPack(brainName: string, options: ExportOptions = {})
 
   try {
     await access(packDir)
-    throw new IncurError({
-      code: 'PACK_DIR_EXISTS',
-      message: `Pack directory "${packDir}" already exists.`,
-      hint: 'Remove it first or use a different --out path.',
-    })
+    throw createError(ErrorCode.PACK_DIR_EXISTS, { params: [packDir] })
   } catch (e) {
     if (e instanceof IncurError) throw e
   }
@@ -169,25 +165,20 @@ export async function readManifest(packDir: string): Promise<PackManifest> {
   try {
     raw = await readFile(manifestPath, 'utf-8')
   } catch {
-    throw new IncurError({
-      code: 'PACK_NO_MANIFEST',
-      message: `No pack.yaml found in "${packDir}". Is this a brainjar pack?`,
-    })
+    throw createError(ErrorCode.PACK_NO_MANIFEST, { params: [packDir] })
   }
 
   let parsed: unknown
   try {
     parsed = parseYaml(raw)
   } catch (e) {
-    throw new IncurError({
-      code: 'PACK_CORRUPT_MANIFEST',
+    throw createError(ErrorCode.PACK_CORRUPT_MANIFEST, {
       message: `pack.yaml is corrupt: ${(e as Error).message}`,
     })
   }
 
   if (!parsed || typeof parsed !== 'object') {
-    throw new IncurError({
-      code: 'PACK_CORRUPT_MANIFEST',
+    throw createError(ErrorCode.PACK_CORRUPT_MANIFEST, {
       message: 'pack.yaml is empty or invalid.',
     })
   }
@@ -196,45 +187,39 @@ export async function readManifest(packDir: string): Promise<PackManifest> {
 
   for (const field of ['name', 'version', 'brain'] as const) {
     if (typeof p[field] !== 'string' || !p[field]) {
-      throw new IncurError({
-        code: 'PACK_INVALID_MANIFEST',
+      throw createError(ErrorCode.PACK_INVALID_MANIFEST, {
         message: `pack.yaml is missing required field "${field}".`,
       })
     }
   }
 
   if (!SEMVER_RE.test(p.version as string)) {
-    throw new IncurError({
-      code: 'PACK_INVALID_VERSION',
+    throw createError(ErrorCode.PACK_INVALID_VERSION, {
       message: `Invalid version "${p.version}" in pack.yaml. Expected semver (e.g., 0.1.0).`,
     })
   }
 
   const contents = p.contents as Record<string, unknown> | undefined
   if (!contents || typeof contents !== 'object') {
-    throw new IncurError({
-      code: 'PACK_INVALID_MANIFEST',
+    throw createError(ErrorCode.PACK_INVALID_MANIFEST, {
       message: 'pack.yaml is missing required field "contents".',
     })
   }
 
   if (typeof contents.soul !== 'string' || !contents.soul) {
-    throw new IncurError({
-      code: 'PACK_INVALID_MANIFEST',
+    throw createError(ErrorCode.PACK_INVALID_MANIFEST, {
       message: 'pack.yaml is missing required field "contents.soul".',
     })
   }
 
   if (typeof contents.persona !== 'string' || !contents.persona) {
-    throw new IncurError({
-      code: 'PACK_INVALID_MANIFEST',
+    throw createError(ErrorCode.PACK_INVALID_MANIFEST, {
       message: 'pack.yaml is missing required field "contents.persona".',
     })
   }
 
   if (!Array.isArray(contents.rules)) {
-    throw new IncurError({
-      code: 'PACK_INVALID_MANIFEST',
+    throw createError(ErrorCode.PACK_INVALID_MANIFEST, {
       message: 'pack.yaml is missing required field "contents.rules".',
     })
   }
@@ -280,8 +265,7 @@ async function buildBundle(packDir: string, manifest: PackManifest): Promise<Con
       content: await readFile(soulPath, 'utf-8'),
     }
   } catch {
-    throw new IncurError({
-      code: 'PACK_MISSING_FILE',
+    throw createError(ErrorCode.PACK_MISSING_FILE, {
       message: `Pack declares soul "${manifest.contents.soul}" but souls/${manifest.contents.soul}.md is missing.`,
     })
   }
@@ -295,8 +279,7 @@ async function buildBundle(packDir: string, manifest: PackManifest): Promise<Con
       bundled_rules: manifest.contents.rules,
     }
   } catch {
-    throw new IncurError({
-      code: 'PACK_MISSING_FILE',
+    throw createError(ErrorCode.PACK_MISSING_FILE, {
       message: `Pack declares persona "${manifest.contents.persona}" but personas/${manifest.contents.persona}.md is missing.`,
     })
   }
@@ -335,8 +318,7 @@ async function buildBundle(packDir: string, manifest: PackManifest): Promise<Con
     }
 
     if (!found) {
-      throw new IncurError({
-        code: 'PACK_MISSING_FILE',
+      throw createError(ErrorCode.PACK_MISSING_FILE, {
         message: `Pack declares rule "${ruleSlug}" but neither rules/${ruleSlug}/ nor rules/${ruleSlug}.md exists.`,
       })
     }
@@ -354,8 +336,7 @@ async function buildBundle(packDir: string, manifest: PackManifest): Promise<Con
     }
   } catch (e) {
     if (e instanceof IncurError) throw e
-    throw new IncurError({
-      code: 'PACK_MISSING_FILE',
+    throw createError(ErrorCode.PACK_MISSING_FILE, {
       message: `Pack declares brain "${manifest.brain}" but brains/${manifest.brain}.yaml is missing.`,
     })
   }
@@ -369,17 +350,11 @@ export async function importPack(packDir: string, options: ImportOptions = {}): 
   try {
     const s = await stat(packDir)
     if (!s.isDirectory()) {
-      throw new IncurError({
-        code: 'PACK_NOT_DIR',
-        message: `Pack path "${packDir}" is a file, not a directory. Packs are directories.`,
-      })
+      throw createError(ErrorCode.PACK_NOT_DIR, { params: [packDir] })
     }
   } catch (e) {
     if (e instanceof IncurError) throw e
-    throw new IncurError({
-      code: 'PACK_NOT_FOUND',
-      message: `Pack path "${packDir}" does not exist.`,
-    })
+    throw createError(ErrorCode.PACK_NOT_FOUND, { params: [packDir] })
   }
 
   const manifest = await readManifest(packDir)

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile, rm, access, open } from 'node:fs/promises'
 import { Errors } from 'incur'
 import { readConfig } from './config.js'
+import { ErrorCode, createError } from './errors.js'
 
 const { IncurError } = Errors
 
@@ -95,10 +96,8 @@ export async function start(): Promise<{ pid: number }> {
   try {
     await access(bin)
   } catch {
-    throw new IncurError({
-      code: 'BINARY_NOT_FOUND',
+    throw createError(ErrorCode.BINARY_NOT_FOUND, {
       message: `Server binary not found at ${bin}`,
-      hint: "Run 'brainjar init' to install the server.",
     })
   }
 
@@ -121,8 +120,7 @@ export async function start(): Promise<{ pid: number }> {
   const pid = child.pid
   if (!pid) {
     await logFd.close()
-    throw new IncurError({
-      code: 'SERVER_START_FAILED',
+    throw createError(ErrorCode.SERVER_START_FAILED, {
       message: 'Failed to start brainjar server — no PID returned.',
       hint: `Check ${log_file}`,
     })
@@ -221,9 +219,8 @@ export async function ensureRunning(): Promise<void> {
   if (health.healthy) return
 
   if (mode === 'remote') {
-    throw new IncurError({
-      code: 'SERVER_UNREACHABLE',
-      message: `Cannot reach server at ${url}`,
+    throw createError(ErrorCode.SERVER_UNREACHABLE, {
+      params: [url],
       hint: `Check the URL or run 'brainjar server remote <url>'.`,
     })
   }
@@ -235,8 +232,7 @@ export async function ensureRunning(): Promise<void> {
     await start()
   } catch (e) {
     if (e instanceof IncurError) throw e
-    throw new IncurError({
-      code: 'SERVER_START_FAILED',
+    throw createError(ErrorCode.SERVER_START_FAILED, {
       message: 'Failed to start brainjar server.',
       hint: `Check ${config.server.log_file}`,
     })
@@ -250,8 +246,7 @@ export async function ensureRunning(): Promise<void> {
     if (check.healthy) return
   }
 
-  throw new IncurError({
-    code: 'SERVER_START_FAILED',
+  throw createError(ErrorCode.SERVER_START_FAILED, {
     message: 'Server started but failed health check after 10s.',
     hint: `Check ${config.server.log_file}`,
   })

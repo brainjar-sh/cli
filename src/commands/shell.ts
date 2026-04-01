@@ -2,6 +2,7 @@ import { Cli, z, Errors } from 'incur'
 import { randomUUID } from 'node:crypto'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 import { spawn } from 'node:child_process'
 import { putState } from '../state.js'
 import { sync } from '../sync.js'
@@ -22,18 +23,15 @@ export const shell = Cli.create('shell', {
       || c.options['rules-add'] || c.options['rules-remove']
 
     if (c.options.brain && individualFlags) {
-      throw new IncurError({
-        code: 'MUTUALLY_EXCLUSIVE',
+      throw createError(ErrorCode.MUTUALLY_EXCLUSIVE, {
         message: '--brain is mutually exclusive with --soul, --persona, --rules-add, --rules-remove.',
         hint: 'Use --brain alone or individual flags, not both.',
       })
     }
 
     if (!c.options.brain && !individualFlags) {
-      throw new IncurError({
-        code: 'NO_OVERRIDES',
+      throw createError(ErrorCode.NO_OVERRIDES, {
         message: 'No overrides specified.',
-        hint: 'Use --brain, --soul, --persona, --rules-add, or --rules-remove.',
       })
     }
 
@@ -116,8 +114,7 @@ export const shell = Cli.create('shell', {
         }
       })
       child.on('error', (err) => {
-        reject(new IncurError({
-          code: 'SHELL_ERROR',
+        reject(createError(ErrorCode.SHELL_ERROR, {
           message: `Failed to spawn shell: ${err.message}`,
         }))
       })

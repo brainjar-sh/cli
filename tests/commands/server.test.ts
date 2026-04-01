@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } fr
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { server } from '../../src/commands/server.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run,
@@ -40,7 +41,7 @@ describe('server start', () => {
   test('rejects remote mode', async () => {
     const { exitCode, parsed } = await run(server, ['start', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('INVALID_MODE')
+    expect(parsed.code).toBe(ErrorCode.INVALID_MODE)
   })
 })
 
@@ -51,7 +52,7 @@ describe('server stop', () => {
   test('rejects remote mode', async () => {
     const { exitCode, parsed } = await run(server, ['stop', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('INVALID_MODE')
+    expect(parsed.code).toBe(ErrorCode.INVALID_MODE)
   })
 })
 
@@ -93,6 +94,6 @@ describe('server remote', () => {
   test('rejects unreachable server', async () => {
     const { exitCode, parsed } = await run(server, ['remote', 'http://localhost:1', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('SERVER_UNREACHABLE')
+    expect(parsed.code).toBe(ErrorCode.SERVER_UNREACHABLE)
   })
 })

@@ -2,6 +2,7 @@ import { Cli, z, Errors } from 'incur'
 import { basename } from 'node:path'
 
 const { IncurError } = Errors
+import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
@@ -25,14 +26,10 @@ export const soul = Cli.create('soul', {
       // Check if it already exists
       try {
         await api.get<ApiSoul>(`/api/v1/souls/${name}`)
-        throw new IncurError({
-          code: 'SOUL_EXISTS',
-          message: `Soul "${name}" already exists.`,
-          hint: 'Choose a different name or edit the existing soul.',
-        })
+        throw createError(ErrorCode.SOUL_EXISTS, { params: [name] })
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'SOUL_EXISTS') throw e
-        if (e instanceof IncurError && e.code !== 'NOT_FOUND') throw e
+        if (e instanceof IncurError && e.code === ErrorCode.SOUL_EXISTS) throw e
+        if (e instanceof IncurError && e.code !== ErrorCode.NOT_FOUND) throw e
       }
 
       const lines: string[] = []
@@ -90,12 +87,8 @@ export const soul = Cli.create('soul', {
           const soul = await api.get<ApiSoul>(`/api/v1/souls/${name}`)
           return { name, title: soul.title, content: soul.content }
         } catch (e) {
-          if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-            throw new IncurError({
-              code: 'SOUL_NOT_FOUND',
-              message: `Soul "${name}" not found.`,
-              hint: 'Run `brainjar soul list` to see available souls.',
-            })
+          if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+            throw createError(ErrorCode.SOUL_NOT_FOUND, { params: [name] })
           }
           throw e
         }
@@ -141,12 +134,8 @@ export const soul = Cli.create('soul', {
       try {
         await api.get<ApiSoul>(`/api/v1/souls/${name}`)
       } catch (e) {
-        if (e instanceof IncurError && e.code === 'NOT_FOUND') {
-          throw new IncurError({
-            code: 'SOUL_NOT_FOUND',
-            message: `Soul "${name}" not found.`,
-            hint: 'Run `brainjar soul list` to see available souls.',
-          })
+        if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
+          throw createError(ErrorCode.SOUL_NOT_FOUND, { params: [name] })
         }
         throw e
       }

@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { brain } from '../../src/commands/brain.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run, setState, seedSoul, seedPersona, seedBrain, store,
@@ -27,7 +28,7 @@ describe('brain commands', () => {
     setState({ soul: 'x', persona: 'y', rules: [] })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('BRAIN_EXISTS')
+    expect(parsed.code).toBe(ErrorCode.BRAIN_EXISTS)
   })
 
   test('save with --overwrite replaces existing', async () => {
@@ -42,14 +43,14 @@ describe('brain commands', () => {
     setState({ persona: 'reviewer' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('NO_ACTIVE_SOUL')
+    expect(parsed.code).toBe(ErrorCode.NO_ACTIVE_SOUL)
   })
 
   test('save errors when no active persona', async () => {
     setState({ soul: 'craftsman' })
     const { exitCode, parsed } = await run(brain, ['save', 'review', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('NO_ACTIVE_PERSONA')
+    expect(parsed.code).toBe(ErrorCode.NO_ACTIVE_PERSONA)
   })
 
   test('use activates brain — sets soul, persona, rules', async () => {
@@ -80,7 +81,7 @@ describe('brain commands', () => {
   test('use errors on missing brain', async () => {
     const { exitCode, parsed } = await run(brain, ['use', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('BRAIN_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.BRAIN_NOT_FOUND)
   })
 
   test('use errors when brain references missing soul', async () => {
@@ -88,7 +89,7 @@ describe('brain commands', () => {
     seedBrain('bad', 'ghost', 'reviewer')
     const { exitCode, parsed } = await run(brain, ['use', 'bad', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('SOUL_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.SOUL_NOT_FOUND)
   })
 
   test('use errors when brain references missing persona', async () => {
@@ -96,7 +97,7 @@ describe('brain commands', () => {
     seedBrain('bad', 'craftsman', 'ghost')
     const { exitCode, parsed } = await run(brain, ['use', 'bad', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('PERSONA_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.PERSONA_NOT_FOUND)
   })
 
   test('list returns available brains', async () => {
@@ -124,7 +125,7 @@ describe('brain commands', () => {
   test('show errors on missing brain', async () => {
     const { exitCode, parsed } = await run(brain, ['show', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('BRAIN_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.BRAIN_NOT_FOUND)
   })
 
   test('drop deletes a brain', async () => {
@@ -137,7 +138,7 @@ describe('brain commands', () => {
   test('drop errors on missing brain', async () => {
     const { exitCode, parsed } = await run(brain, ['drop', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('BRAIN_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.BRAIN_NOT_FOUND)
   })
 
   test('save rejects invalid name', async () => {

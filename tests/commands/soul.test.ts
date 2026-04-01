@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { soul } from '../../src/commands/soul.js'
+import { ErrorCode } from '../../src/errors.js'
 import {
   startMockServer, stopMockServer, restoreGlobalEnv,
   setup, teardown, run, setState, seedSoul, store,
@@ -28,7 +29,7 @@ describe('soul commands', () => {
     seedSoul('warrior', '# warrior')
     const { parsed, exitCode } = await run(soul, ['create', 'warrior', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('SOUL_EXISTS')
+    expect(parsed.code).toBe(ErrorCode.SOUL_EXISTS)
   })
 
   test('create rejects invalid name', async () => {
@@ -59,7 +60,7 @@ describe('soul commands', () => {
   test('show errors on missing named soul', async () => {
     const { exitCode, parsed } = await run(soul, ['show', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('SOUL_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.SOUL_NOT_FOUND)
   })
 
   test('show returns active soul content', async () => {
@@ -85,7 +86,7 @@ describe('soul commands', () => {
   test('use rejects missing soul', async () => {
     const { exitCode, parsed } = await run(soul, ['use', 'ghost', '--format', 'json'])
     expect(exitCode).toBe(1)
-    expect(parsed.code).toBe('SOUL_NOT_FOUND')
+    expect(parsed.code).toBe(ErrorCode.SOUL_NOT_FOUND)
   })
 
   test('drop deactivates active soul', async () => {
