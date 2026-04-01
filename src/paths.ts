@@ -37,9 +37,5 @@ export function getLocalDir() {
 
 export const paths = {
   get root() { return getBrainjarDir() },
-  get souls() { return join(getBrainjarDir(), 'souls') },
-  get personas() { return join(getBrainjarDir(), 'personas') },
-  get rules() { return join(getBrainjarDir(), 'rules') },
-  get brains() { return join(getBrainjarDir(), 'brains') },
   get config() { return join(getBrainjarDir(), 'config.yaml') },
 }
