@@ -108,18 +108,43 @@ export const Messages: Partial<Record<ErrorCode, string | ((...args: string[]) =
 // ---------------------------------------------------------------------------
 
 export const Hints: Partial<Record<ErrorCode, string | ((...args: string[]) => string)>> = {
-  SOUL_EXISTS: 'Choose a different name or edit the existing soul.',
-  SOUL_NOT_FOUND: 'Run `brainjar soul list` to see available souls.',
-  PERSONA_EXISTS: 'Choose a different name or edit the existing persona.',
-  PERSONA_NOT_FOUND: 'Run `brainjar persona list` to see available personas.',
-  BRAIN_EXISTS: 'Use --overwrite to replace it, or choose a different name.',
-  BRAIN_NOT_FOUND: 'Run `brainjar brain list` to see available brains.',
-  RULE_EXISTS: 'Choose a different name or edit the existing rule.',
-  RULE_NOT_FOUND: 'Run `brainjar rules list` to see available rules.',
-  NO_ACTIVE_SOUL: 'Activate a soul first with `brainjar soul use <name>`.',
-  NO_ACTIVE_PERSONA: 'Activate a persona first with `brainjar persona use <name>`.',
-  PACK_DIR_EXISTS: 'Remove it first or use a different --out path.',
-  BINARY_NOT_FOUND: "Run 'brainjar init' to install the server.",
+  // Domain: souls
+  SOUL_EXISTS: 'Pick a different name, or edit the existing one: `brainjar soul show <name>`',
+  SOUL_NOT_FOUND: 'List available souls: `brainjar soul list`',
+
+  // Domain: personas
+  PERSONA_EXISTS: 'Pick a different name, or edit the existing one: `brainjar persona show <name>`',
+  PERSONA_NOT_FOUND: 'List available personas: `brainjar persona list`',
+
+  // Domain: brains
+  BRAIN_EXISTS: 'Overwrite with --overwrite, or pick a different name.',
+  BRAIN_NOT_FOUND: 'List available brains: `brainjar brain list`',
+
+  // Domain: rules
+  RULE_EXISTS: 'Pick a different name, or edit the existing one: `brainjar rules show <name>`',
+  RULE_NOT_FOUND: 'List available rules: `brainjar rules list`',
+
+  // Domain: state
+  NO_ACTIVE_SOUL: 'Activate a soul first: `brainjar soul use <name>`',
+  NO_ACTIVE_PERSONA: 'Activate a persona first: `brainjar persona use <name>`',
+
+  // Packs
+  PACK_DIR_EXISTS: 'Remove the directory first, or use --out to write elsewhere.',
+  PACK_NO_MANIFEST: 'A valid pack needs a pack.yaml at its root.',
+
+  // Infra
+  BINARY_NOT_FOUND: 'Install the server: `brainjar init`',
+  SERVER_UNREACHABLE: 'Start the server: `brainjar server start`, or set a remote: `brainjar server remote <url>`',
+  SERVER_START_FAILED: 'Check server logs: `brainjar server logs`',
+  SERVER_UNAVAILABLE: 'Server is starting up. Retry in a moment, or check: `brainjar server status`',
+  UNAUTHORIZED: 'Verify server config: `brainjar server status`',
+  SERVER_ERROR: 'Check server logs: `brainjar server logs`',
+
+  // Validation
+  INVALID_MODE: 'Switch to local mode: `brainjar server local`',
+  NO_OVERRIDES: 'Pass --brain, --soul, --persona, --rules-add, or --rules-remove.',
+  MUTUALLY_EXCLUSIVE: 'Use one or the other, not both.',
+  MISSING_ARG: 'Run with --help to see usage.',
 }
 
 // ---------------------------------------------------------------------------
