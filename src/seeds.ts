@@ -1,114 +1,75 @@
-import { mkdir, readdir, writeFile, copyFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { paths } from './paths.js'
+import type { ContentBundle, BundleRuleEntry } from './api-types.js'
+import { parseFrontmatter } from './migrate.js'
 
 const SEEDS_DIR = join(import.meta.dir, 'seeds')
 
-// ---------------------------------------------------------------------------
-// Obsidian vault configuration
-// ---------------------------------------------------------------------------
-
-function obsidianAppearanceConfig() {
-  return JSON.stringify({
-    accentColor: '',
-    baseFontSize: 16,
-  }, null, 2)
+async function readSeed(relPath: string): Promise<string> {
+  return readFile(join(SEEDS_DIR, relPath), 'utf-8')
 }
 
 /**
- * Obsidian file-explorer exclusion via userIgnoreFilters.
- * Excludes private/state files from the vault file explorer.
+ * Build a ContentBundle from the embedded seed files.
+ * This bundle can be POSTed to /api/v1/import.
  */
-function obsidianAppConfigWithExclusions() {
-  return JSON.stringify({
-    showLineNumber: true,
-    strictLineBreaks: true,
-    useMarkdownLinks: false,
-    alwaysUpdateLinks: true,
-    userIgnoreFilters: [
-      'state.yaml',
-      '.gitignore',
-    ],
-  }, null, 2)
-}
+export async function buildSeedBundle(): Promise<ContentBundle> {
+  const [
+    craftsmanContent,
+    engineerContent,
+    plannerContent,
+    reviewerContent,
+    gitDisciplineContent,
+    securityContent,
+    defaultRuleFiles,
+  ] = await Promise.all([
+    readSeed('souls/craftsman.md'),
+    readSeed('personas/engineer.md'),
+    readSeed('personas/planner.md'),
+    readSeed('personas/reviewer.md'),
+    readSeed('rules/git-discipline.md'),
+    readSeed('rules/security.md'),
+    readdir(join(SEEDS_DIR, 'rules', 'default')),
+  ])
 
-function obsidianCorePlugins() {
-  return JSON.stringify({
-    'file-explorer': true,
-    'global-search': true,
-    'graph': true,
-    'tag-pane': true,
-    'templates': true,
-    'outline': true,
-    'editor-status': true,
-    'starred': true,
-    'command-palette': true,
-    'markdown-importer': false,
-    'word-count': true,
-  }, null, 2)
-}
-
-function obsidianTemplatesConfig() {
-  return JSON.stringify({
-    folder: 'templates',
-  }, null, 2)
-}
-
-// ---------------------------------------------------------------------------
-// Seed functions
-// ---------------------------------------------------------------------------
-
-/** Copy a seed .md file from src/seeds/ to a target path. */
-async function copySeed(seedRelPath: string, destPath: string) {
-  await copyFile(join(SEEDS_DIR, seedRelPath), destPath)
-}
-
-/** Seed the default rule pack — the baseline every persona references */
-export async function seedDefaultRule(rulesDir: string) {
-  const defaultDir = join(rulesDir, 'default')
-  await mkdir(defaultDir, { recursive: true })
-
-  const seedDir = join(SEEDS_DIR, 'rules', 'default')
-  const files = await readdir(seedDir)
-  await Promise.all(
-    files.filter(f => f.endsWith('.md')).map(f =>
-      copySeed(join('rules', 'default', f), join(defaultDir, f))
-    )
+  const defaultMdFiles = defaultRuleFiles.filter(f => f.endsWith('.md')).sort()
+  const defaultEntries: BundleRuleEntry[] = await Promise.all(
+    defaultMdFiles.map(async (file, i) => ({
+      sort_key: i,
+      content: await readSeed(join('rules', 'default', file)),
+    }))
   )
-}
 
-/** Seed starter content: soul, personas, and rules */
-export async function seedDefaults() {
-  await Promise.all([
-    // Soul
-    copySeed('souls/craftsman.md', join(paths.souls, 'craftsman.md')),
+  const engineerParsed = parseFrontmatter(engineerContent)
+  const plannerParsed = parseFrontmatter(plannerContent)
+  const reviewerParsed = parseFrontmatter(reviewerContent)
 
-    // Personas
-    copySeed('personas/engineer.md', join(paths.personas, 'engineer.md')),
-    copySeed('personas/planner.md', join(paths.personas, 'planner.md')),
-    copySeed('personas/reviewer.md', join(paths.personas, 'reviewer.md')),
+  function extractBundledRules(fm: Record<string, unknown>): string[] {
+    return Array.isArray(fm.rules) ? fm.rules.map(String) : []
+  }
 
-    // Rules
-    copySeed('rules/git-discipline.md', join(paths.rules, 'git-discipline.md')),
-    copySeed('rules/security.md', join(paths.rules, 'security.md')),
-  ])
-}
-
-/** Set up ~/.brainjar/ as an Obsidian vault */
-export async function initObsidian(brainjarDir: string) {
-  const obsidianDir = join(brainjarDir, '.obsidian')
-  const templatesDir = join(brainjarDir, 'templates')
-
-  await mkdir(obsidianDir, { recursive: true })
-  await mkdir(templatesDir, { recursive: true })
-
-  await Promise.all([
-    writeFile(join(obsidianDir, 'app.json'), obsidianAppConfigWithExclusions()),
-    writeFile(join(obsidianDir, 'appearance.json'), obsidianAppearanceConfig()),
-    writeFile(join(obsidianDir, 'core-plugins.json'), obsidianCorePlugins()),
-    writeFile(join(obsidianDir, 'templates.json'), obsidianTemplatesConfig()),
-    copySeed('templates/soul.md', join(templatesDir, 'soul.md')),
-    copySeed('templates/persona.md', join(templatesDir, 'persona.md')),
-    copySeed('templates/rule.md', join(templatesDir, 'rule.md')),
-  ])
+  return {
+    souls: {
+      craftsman: { content: craftsmanContent },
+    },
+    personas: {
+      engineer: {
+        content: engineerParsed.body,
+        bundled_rules: extractBundledRules(engineerParsed.frontmatter),
+      },
+      planner: {
+        content: plannerParsed.body,
+        bundled_rules: extractBundledRules(plannerParsed.frontmatter),
+      },
+      reviewer: {
+        content: reviewerParsed.body,
+        bundled_rules: extractBundledRules(reviewerParsed.frontmatter),
+      },
+    },
+    rules: {
+      default: { entries: defaultEntries },
+      'git-discipline': { entries: [{ sort_key: 0, content: gitDisciplineContent }] },
+      security: { entries: [{ sort_key: 0, content: securityContent }] },
+    },
+  }
 }

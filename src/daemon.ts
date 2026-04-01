@@ -1,8 +1,14 @@
 import { spawn } from 'node:child_process'
-import { readFile, writeFile, rm, access, open } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile, writeFile, rm, access, open, chmod, mkdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { Errors } from 'incur'
 import { readConfig } from './config.js'
 import { ErrorCode, createError } from './errors.js'
+
+/** Pinned server version — the CLI downloads this exact release. */
+const SERVER_VERSION = 'v0.1.0'
+const RELEASE_BASE = `https://github.com/brainjar-sh/brainjar-server/releases/download/${SERVER_VERSION}`
 
 const { IncurError } = Errors
 
@@ -85,6 +91,89 @@ async function cleanStalePid(pidFile: string): Promise<boolean> {
   return false
 }
 
+function detectPlatform(): { os: string; arch: string } {
+  const platform = process.platform
+  const arch = process.arch
+
+  const osMap: Record<string, string> = { darwin: 'darwin', linux: 'linux' }
+  const archMap: Record<string, string> = { arm64: 'arm64', x64: 'amd64' }
+
+  const os = osMap[platform]
+  const mapped = archMap[arch]
+
+  if (!os || !mapped) {
+    throw createError(ErrorCode.BINARY_NOT_FOUND, {
+      message: `Unsupported platform: ${platform}/${arch}. Supported: darwin/linux × amd64/arm64.`,
+    })
+  }
+
+  return { os, arch: mapped }
+}
+
+/**
+ * Download a binary and verify its SHA-256 checksum.
+ * Exported for testing — ensureBinary() is the public entry point.
+ */
+export async function downloadAndVerify(binPath: string, releaseBase: string): Promise<void> {
+  const { os, arch } = detectPlatform()
+  const binaryName = `brainjar-server-${os}-${arch}`
+  const binaryUrl = `${releaseBase}/${binaryName}`
+  const checksumsUrl = `${releaseBase}/checksums.txt`
+
+  await mkdir(dirname(binPath), { recursive: true })
+
+  const [checksumsResponse, binaryResponse] = await Promise.all([
+    fetch(checksumsUrl),
+    fetch(binaryUrl),
+  ])
+
+  if (!binaryResponse.ok) {
+    throw createError(ErrorCode.BINARY_NOT_FOUND, {
+      message: `Failed to download server binary: HTTP ${binaryResponse.status} from ${binaryUrl}`,
+      hint: `Download manually from ${releaseBase} and place at ${binPath}`,
+    })
+  }
+
+  const buffer = Buffer.from(await binaryResponse.arrayBuffer())
+
+  if (checksumsResponse.ok) {
+    const checksumsText = await checksumsResponse.text()
+    const expectedHash = checksumsText
+      .split('\n')
+      .find(line => line.includes(binaryName))
+      ?.split(/\s+/)[0]
+
+    if (expectedHash) {
+      const actualHash = createHash('sha256').update(buffer).digest('hex')
+      if (actualHash !== expectedHash) {
+        throw createError(ErrorCode.BINARY_NOT_FOUND, {
+          message: `Checksum mismatch for ${binaryName}: expected ${expectedHash}, got ${actualHash}`,
+          hint: 'The download may be corrupted. Retry, or download manually.',
+        })
+      }
+    }
+  }
+
+  await writeFile(binPath, buffer)
+  await chmod(binPath, 0o755)
+}
+
+/**
+ * Ensure the server binary exists at the configured path.
+ * Downloads from GitHub releases if missing, verifies SHA-256 checksum.
+ */
+export async function ensureBinary(): Promise<void> {
+  const config = await readConfig()
+  const binPath = config.server.bin
+
+  try {
+    await access(binPath)
+    return
+  } catch {}
+
+  await downloadAndVerify(binPath, RELEASE_BASE)
+}
+
 /**
  * Start the server daemon.
  * Spawns the binary in detached mode, writes PID file.
@@ -114,7 +203,7 @@ export async function start(): Promise<{ pid: number }> {
   const child = spawn(bin, [], {
     detached: true,
     stdio: ['ignore', logFd.fd, logFd.fd],
-    env: { ...process.env, PORT: port },
+    env: { ...process.env, PORT: port, BRAINJAR_POSTGRES_EMBEDDED: 'true' },
   })
 
   const pid = child.pid

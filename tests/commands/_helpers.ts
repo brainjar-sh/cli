@@ -308,6 +308,11 @@ export function startMockServer() {
         })()
       }
 
+      // ─── Workspaces endpoint ────────────────────────────────────
+      if (path === '/api/v1/workspaces' && method === 'POST') {
+        return Response.json({ id: 'test-ws-id', name: 'default' }, { status: 201 })
+      }
+
       return Response.json({ error: 'Not found' }, { status: 404 })
     },
   })

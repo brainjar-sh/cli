@@ -1,46 +1,69 @@
 import { Cli, z } from 'incur'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, access } from 'node:fs/promises'
 import { getBrainjarDir, paths, type Backend } from '../paths.js'
-import { seedDefaultRule, seedDefaults, initObsidian } from '../seeds.js'
+import { buildSeedBundle } from '../seeds.js'
 import { putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
+import { readConfig, writeConfig, type Config } from '../config.js'
+import { ensureBinary } from '../daemon.js'
+import type { ApiImportResult } from '../api-types.js'
 
 export const init = Cli.create('init', {
-  description: 'Bootstrap ~/.brainjar/ directory structure',
+  description: 'Initialize brainjar: config, server, and optional seed content',
   options: z.object({
     backend: z.enum(['claude', 'codex']).default('claude').describe('Agent backend to target'),
     default: z.boolean().default(false).describe('Seed starter soul, personas, and rules'),
-    obsidian: z.boolean().default(false).describe('Set up ~/.brainjar/ as an Obsidian vault'),
   }),
   async run(c) {
     const brainjarDir = getBrainjarDir()
+    const binDir = `${brainjarDir}/bin`
 
-    await Promise.all([
-      mkdir(paths.souls, { recursive: true }),
-      mkdir(paths.personas, { recursive: true }),
-      mkdir(paths.rules, { recursive: true }),
-      mkdir(paths.brains, { recursive: true }),
-    ])
+    // 1. Create directories
+    await mkdir(brainjarDir, { recursive: true })
+    await mkdir(binDir, { recursive: true })
 
-    // Seed the default rule pack
-    await seedDefaultRule(paths.rules)
+    // 2. Write config.yaml if missing
+    let configExists = false
+    try {
+      await access(paths.config)
+      configExists = true
+    } catch {}
 
-    // Build .gitignore — always exclude private files, add .obsidian if vault enabled
-    const gitignoreLines = ['state.yaml']
-    if (c.options.obsidian) {
-      gitignoreLines.push('.obsidian/', 'templates/')
+    if (!configExists) {
+      const config: Config = {
+        server: {
+          url: 'http://localhost:7742',
+          mode: 'local',
+          bin: `${brainjarDir}/bin/brainjar-server`,
+          pid_file: `${brainjarDir}/server.pid`,
+          log_file: `${brainjarDir}/server.log`,
+        },
+        workspace: 'default',
+        backend: c.options.backend as Backend,
+      }
+      await writeConfig(config)
     }
-    await writeFile(join(brainjarDir, '.gitignore'), gitignoreLines.join('\n') + '\n')
 
-    if (c.options.default) {
-      await seedDefaults()
-    }
+    // 3. Ensure server binary exists (download if needed)
+    await ensureBinary()
 
+    // 4. Start server and get API client
     const api = await getApi()
 
+    // 5. Ensure workspace exists (ignore conflict if already created)
+    const config = await readConfig()
+    try {
+      await api.post('/api/v1/workspaces', { name: config.workspace })
+    } catch (e: any) {
+      if (e.code !== 'CONFLICT') throw e
+    }
+
+    // 6. Seed defaults if requested
     if (c.options.default) {
+      const bundle = await buildSeedBundle()
+      await api.post<ApiImportResult>('/api/v1/import', bundle)
+
       await putState(api, {
         soul_slug: 'craftsman',
         persona_slug: 'engineer',
@@ -48,12 +71,13 @@ export const init = Cli.create('init', {
       })
     }
 
+    // 7. Sync to write CLAUDE.md / AGENTS.md
     await sync({ api, backend: c.options.backend as Backend })
 
+    // 8. Build result
     const result: Record<string, unknown> = {
       created: brainjarDir,
       backend: c.options.backend,
-      directories: ['souls/', 'personas/', 'rules/', 'brains/'],
     }
 
     if (c.options.default) {
@@ -64,13 +88,6 @@ export const init = Cli.create('init', {
       result.next = 'Ready to go. Run `brainjar status` to see your config.'
     } else {
       result.next = 'Run `brainjar soul create <name>` to create your first soul.'
-    }
-
-    if (c.options.obsidian) {
-      await initObsidian(brainjarDir)
-      result.obsidian = true
-      result.vault = brainjarDir
-      result.hint = `Open "${brainjarDir}" as a vault in Obsidian.`
     }
 
     return result

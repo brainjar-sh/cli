@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { rm, mkdir, writeFile, readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { rm, mkdir, writeFile, readFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { healthCheck, status } from '../src/daemon.js'
+import { healthCheck, status, downloadAndVerify } from '../src/daemon.js'
 
 const TEST_HOME = join(import.meta.dir, '..', '.test-home-daemon')
 let server: ReturnType<typeof Bun.serve> | null = null
@@ -77,5 +78,102 @@ describe('status', () => {
     )
     const result = await status()
     expect(result.healthy).toBe(false)
+  })
+})
+
+// ─── downloadAndVerify ──────────────────────────────────────────────────────
+
+describe('downloadAndVerify', () => {
+  const FAKE_BINARY = Buffer.from('#!/bin/sh\necho fake-server\n')
+  const FAKE_HASH = createHash('sha256').update(FAKE_BINARY).digest('hex')
+  const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
+  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64'
+  const binaryName = `brainjar-server-${platform}-${arch}`
+
+  let dlServer: ReturnType<typeof Bun.serve>
+  let dlUrl: string
+
+  beforeAll(() => {
+    dlServer = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url)
+
+        if (url.pathname === `/${binaryName}`) {
+          return new Response(FAKE_BINARY, {
+            headers: { 'Content-Type': 'application/octet-stream' },
+          })
+        }
+
+        if (url.pathname === '/checksums.txt') {
+          return new Response(`${FAKE_HASH}  ${binaryName}\n`)
+        }
+
+        if (url.pathname === `/bad-checksum/${binaryName}`) {
+          return new Response(FAKE_BINARY, {
+            headers: { 'Content-Type': 'application/octet-stream' },
+          })
+        }
+
+        if (url.pathname === '/bad-checksum/checksums.txt') {
+          return new Response(`deadbeef00000000000000000000000000000000000000000000000000000000  ${binaryName}\n`)
+        }
+
+        if (url.pathname === `/no-checksums/${binaryName}`) {
+          return new Response(FAKE_BINARY, {
+            headers: { 'Content-Type': 'application/octet-stream' },
+          })
+        }
+
+        if (url.pathname === '/no-checksums/checksums.txt') {
+          return new Response('Not Found', { status: 404 })
+        }
+
+        return new Response('Not Found', { status: 404 })
+      },
+    })
+    dlUrl = `http://localhost:${dlServer.port}`
+  })
+
+  afterAll(() => {
+    dlServer?.stop()
+  })
+
+  test('downloads binary and verifies checksum', async () => {
+    const binPath = join(TEST_HOME, '.brainjar', 'bin', 'brainjar-server')
+    await downloadAndVerify(binPath, dlUrl)
+
+    // Binary should exist and be executable
+    await access(binPath)
+    const content = await readFile(binPath)
+    expect(content.toString()).toContain('fake-server')
+  })
+
+  test('rejects checksum mismatch', async () => {
+    const binPath = join(TEST_HOME, '.brainjar', 'bin', 'brainjar-server-bad')
+    try {
+      await downloadAndVerify(binPath, `${dlUrl}/bad-checksum`)
+      expect(true).toBe(false) // should not reach
+    } catch (e: any) {
+      expect(e.code).toBe('BINARY_NOT_FOUND')
+      expect(e.message).toContain('Checksum mismatch')
+    }
+  })
+
+  test('succeeds without checksums (graceful degradation)', async () => {
+    const binPath = join(TEST_HOME, '.brainjar', 'bin', 'brainjar-server-nc')
+    await downloadAndVerify(binPath, `${dlUrl}/no-checksums`)
+    await access(binPath)
+  })
+
+  test('throws on download failure (404)', async () => {
+    const binPath = join(TEST_HOME, '.brainjar', 'bin', 'brainjar-server-404')
+    try {
+      await downloadAndVerify(binPath, `${dlUrl}/nonexistent`)
+      expect(true).toBe(false)
+    } catch (e: any) {
+      expect(e.code).toBe('BINARY_NOT_FOUND')
+      expect(e.message).toContain('Failed to download')
+    }
   })
 })
