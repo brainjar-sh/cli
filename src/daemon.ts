@@ -191,6 +191,24 @@ export async function status(): Promise<DaemonStatus> {
 }
 
 /**
+ * Read the last N lines of the server log file.
+ */
+export async function readLogFile(options?: { lines?: number }): Promise<string> {
+  const config = await readConfig()
+  const lines = options?.lines ?? 50
+  try {
+    const content = await readFile(config.server.log_file, 'utf-8')
+    const allLines = content.trimEnd().split('\n')
+    return allLines.slice(-lines).join('\n')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      return ''
+    }
+    throw e
+  }
+}
+
+/**
  * Ensure the server is running and healthy.
  * Called by commands before making API calls.
  */
