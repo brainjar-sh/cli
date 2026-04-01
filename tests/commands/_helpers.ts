@@ -264,6 +264,50 @@ export function startMockServer() {
         }
       }
 
+      // ─── Import endpoint ──────────────────────────────────────────
+      if (path === '/api/v1/import' && method === 'POST') {
+        return (async () => {
+          const body = await req.json() as Record<string, unknown>
+          let souls = 0, personas = 0, rules = 0, brains = 0
+          const warnings: string[] = []
+
+          if (body.souls && typeof body.souls === 'object') {
+            for (const [slug, soul] of Object.entries(body.souls as Record<string, any>)) {
+              store.souls.set(slug, { slug, title: null, content: soul.content })
+              souls++
+            }
+          }
+          if (body.personas && typeof body.personas === 'object') {
+            for (const [slug, persona] of Object.entries(body.personas as Record<string, any>)) {
+              store.personas.set(slug, {
+                slug, title: null, content: persona.content, bundled_rules: persona.bundled_rules ?? [],
+              })
+              personas++
+            }
+          }
+          if (body.rules && typeof body.rules === 'object') {
+            for (const [slug, rule] of Object.entries(body.rules as Record<string, any>)) {
+              store.rules.set(slug, {
+                slug,
+                entries: rule.entries.map((e: any, i: number) => ({ name: `${i}.md`, content: e.content })),
+              })
+              rules++
+            }
+          }
+          if (body.brains && typeof body.brains === 'object') {
+            for (const [slug, brain] of Object.entries(body.brains as Record<string, any>)) {
+              store.brains.set(slug, { slug, ...(brain as any) })
+              brains++
+            }
+          }
+
+          return Response.json({
+            imported: { souls, personas, rules, brains, state: !!body.state },
+            warnings,
+          })
+        })()
+      }
+
       return Response.json({ error: 'Not found' }, { status: 404 })
     },
   })

@@ -50,6 +50,8 @@ brainjar pack export|import
 brainjar hooks install|remove|status [--local]
 brainjar shell [--brain|--soul|--persona|--rules-add|--rules-remove]
 brainjar reset [--backend claude|codex]
+brainjar server start|stop|status|logs|local|remote
+brainjar migrate [--dry-run] [--skip-backup]
 ```
 
 See the [CLI reference](https://brainjar.sh/reference/cli/) for full details.
