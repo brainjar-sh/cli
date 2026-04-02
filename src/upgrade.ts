@@ -2,15 +2,13 @@ import { execFile } from 'node:child_process'
 import {
   healthCheck,
   start,
-  stop,
   status as daemonStatus,
   upgradeServer,
+  SEMVER_RE,
 } from './daemon.js'
 import { checkForUpdates } from './version-check.js'
 import { ErrorCode, createError } from './errors.js'
 import pkg from '../package.json'
-
-const SEMVER_RE = /^v?\d+\.\d+\.\d+(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(\+[a-zA-Z0-9.]+)?$/
 
 function validateVersion(v: string, label: string): void {
   if (!SEMVER_RE.test(v)) {

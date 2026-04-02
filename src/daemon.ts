@@ -8,6 +8,7 @@ import { readConfig, activeContext, localContext } from './config.js'
 import { ErrorCode, createError } from './errors.js'
 
 export const DIST_BASE = 'https://get.brainjar.sh/brainjar-server'
+export const SEMVER_RE = /^v?\d+\.\d+\.\d+(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(\+[a-zA-Z0-9.]+)?$/
 
 /**
  * Compare two semver strings. Returns -1, 0, or 1.
@@ -157,7 +158,7 @@ export async function fetchLatestVersion(distBase: string = DIST_BASE): Promise<
     })
   }
   const version = (await response.text()).trim()
-  if (!/^v?\d+\.\d+\.\d+(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(\+[a-zA-Z0-9.]+)?$/.test(version)) {
+  if (!SEMVER_RE.test(version)) {
     throw createError(ErrorCode.VALIDATION_ERROR, {
       message: `Invalid server version string from distribution: "${version}"`,
     })
