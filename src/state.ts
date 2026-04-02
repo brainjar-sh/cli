@@ -1,5 +1,5 @@
-import type { BrainjarClient } from './client.js'
-import type { ApiEffectiveState, ApiStateMutation } from './api-types.js'
+import type { BrainjarClient, RequestOptions } from './client.js'
+import type { ApiEffectiveState, ApiStateMutation, ApiStateOverride, ApiStateOverrideResponse } from './api-types.js'
 
 const SLUG_RE = /^[a-zA-Z0-9_-]+$/
 
@@ -15,8 +15,14 @@ export function normalizeSlug(value: string, label: string): string {
 }
 
 /** Fetch the fully resolved effective state from the server. */
-export async function getEffectiveState(api: BrainjarClient): Promise<ApiEffectiveState> {
-  return api.get<ApiEffectiveState>('/api/v1/state')
+export async function getEffectiveState(api: BrainjarClient, options?: RequestOptions): Promise<ApiEffectiveState> {
+  return api.get<ApiEffectiveState>('/api/v1/state', options)
+}
+
+/** Fetch the raw override at a specific scope, unwrapping the server envelope. */
+export async function getStateOverride(api: BrainjarClient, options?: RequestOptions): Promise<ApiStateOverride> {
+  const resp = await api.get<ApiStateOverrideResponse>('/api/v1/state/override', options)
+  return resp.override ?? {}
 }
 
 /** Mutate state on the server. Pass options.project to scope the mutation to a project. */

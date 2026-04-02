@@ -96,9 +96,9 @@ export function startMockServer() {
       if (path === '/api/v1/state/override' && method === 'GET') {
         if (project) {
           const override = store.projectOverrides.get(project) ?? {}
-          return Response.json(override)
+          return Response.json({ override, scope: null })
         }
-        return Response.json(store.workspaceOverride)
+        return Response.json({ override: store.workspaceOverride, scope: null })
       }
 
       // ─── Compose endpoint ─────────────────────────────────────────

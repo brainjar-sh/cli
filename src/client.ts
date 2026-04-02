@@ -19,7 +19,8 @@ export interface ClientOptions {
 export interface RequestOptions {
   timeout?: number
   headers?: Record<string, string>
-  project?: string
+  /** Pass a project name to scope to that project, null to suppress auto-detection, or undefined for auto-detect. */
+  project?: string | null
 }
 
 export interface BrainjarClient {
@@ -40,7 +41,8 @@ const ERROR_MAP: Record<number, { code: ErrorCode; hint?: string }> = {
   503: { code: ErrorCode.SERVER_UNAVAILABLE, hint: 'Server is not ready. Try again in a moment.' },
 }
 
-async function detectProject(explicit?: string): Promise<string | null> {
+async function detectProject(explicit?: string | null): Promise<string | null> {
+  if (explicit === null) return null // explicitly suppress auto-detection
   if (explicit) return explicit
   try {
     await access(getLocalDir())
@@ -72,7 +74,8 @@ export async function createClient(options?: ClientOptions): Promise<BrainjarCli
       ...(reqOpts?.headers ?? {}),
     }
 
-    const project = await detectProject(reqOpts?.project ?? options?.project)
+    const explicitProject = reqOpts && 'project' in reqOpts ? reqOpts.project : options?.project
+    const project = await detectProject(explicitProject)
     if (project) headers['X-Brainjar-Project'] = project
     if (session) headers['X-Brainjar-Session'] = session
 

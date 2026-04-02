@@ -1,4 +1,5 @@
 import { readFile, writeFile, copyFile, mkdir } from 'node:fs/promises'
+import { basename } from 'node:path'
 import { type Backend, getBackendConfig } from './paths.js'
 import { getEffectiveState } from './state.js'
 import { getApi, type BrainjarClient } from './client.js'
@@ -72,7 +73,7 @@ export async function sync(options?: SyncOptions) {
   const opts = options ?? {}
   const api = opts.api ?? await getApi()
 
-  const state = await getEffectiveState(api)
+  const state = await getEffectiveState(api, opts.project ? { project: basename(process.cwd()) } : undefined)
   const backend: Backend = opts.backend ?? 'claude'
   const config = getBackendConfig(backend, { local: opts.project })
 

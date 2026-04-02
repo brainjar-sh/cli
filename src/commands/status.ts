@@ -1,9 +1,8 @@
 import { Cli, z } from 'incur'
 import { basename } from 'node:path'
-import { getEffectiveState } from '../state.js'
+import { getEffectiveState, getStateOverride } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
-import type { ApiStateOverride } from '../api-types.js'
 
 export const status = Cli.create('status', {
   description: 'Show active brain configuration',
@@ -35,11 +34,11 @@ export const status = Cli.create('status', {
 
     // --workspace: show only workspace-level override
     if (c.options.workspace) {
-      const override = await api.get<ApiStateOverride>('/api/v1/state/override')
+      const override = await getStateOverride(api, { project: null })
       const result: Record<string, unknown> = {
         soul: override.soul_slug ?? null,
         persona: override.persona_slug ?? null,
-        rules: override.rule_slugs ?? [],
+        rules: override.rules_to_add ?? [],
       }
       if (synced) result.synced = synced
       return result
@@ -47,7 +46,7 @@ export const status = Cli.create('status', {
 
     // --project: show only project-level overrides
     if (c.options.project) {
-      const override = await api.get<ApiStateOverride>('/api/v1/state/override', {
+      const override = await getStateOverride(api, {
         project: basename(process.cwd()),
       })
       const result: Record<string, unknown> = {}

@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 
 const { IncurError } = Errors
 import { ErrorCode, createError } from '../errors.js'
-import { normalizeSlug, getEffectiveState, putState } from '../state.js'
+import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
 import type { ApiRule, ApiRuleList } from '../api-types.js'
@@ -112,7 +112,7 @@ export const rules = Cli.create('rules', {
       const availableSlugs = available.rules.map(r => r.slug)
 
       if (c.options.project) {
-        const override = await api.get<import('../api-types.js').ApiStateOverride>('/api/v1/state/override', {
+        const override = await getStateOverride(api, {
           project: basename(process.cwd()),
         })
         return {

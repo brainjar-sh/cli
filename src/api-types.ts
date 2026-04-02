@@ -63,13 +63,19 @@ export interface ApiEffectiveState {
   rules: string[]
 }
 
-/** State override at a single scope, returned by GET /api/v1/state/override. */
+/** State override at a single scope. */
 export interface ApiStateOverride {
   soul_slug?: string | null
   persona_slug?: string | null
   rule_slugs?: string[]
   rules_to_add?: string[]
   rules_to_remove?: string[]
+}
+
+/** Envelope returned by GET /api/v1/state/override. */
+export interface ApiStateOverrideResponse {
+  override: ApiStateOverride | null
+  scope: { id: string; scope_type: string; reference_id: string; parent_scope_id?: string } | null
 }
 
 /** Body for PUT /api/v1/state — partial update. */

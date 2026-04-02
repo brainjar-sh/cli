@@ -28,7 +28,7 @@ describe('status command', () => {
 
   test('--workspace shows only workspace state', async () => {
     setState({ soul: 'warrior' })
-    store.workspaceOverride = { soul_slug: 'warrior', persona_slug: null, rule_slugs: [] }
+    store.workspaceOverride = { soul_slug: 'warrior', persona_slug: null, rules_to_add: [] }
     const { parsed } = await run(status, ['--workspace', '--format', 'json'])
     expect(parsed.soul).toBe('warrior')
     expect(parsed.persona).toBeNull()

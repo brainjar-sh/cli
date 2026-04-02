@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 
 const { IncurError } = Errors
 import { ErrorCode, createError } from '../errors.js'
-import { normalizeSlug, getEffectiveState, putState } from '../state.js'
+import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
 import type { ApiPersona, ApiPersonaList, ApiRuleList } from '../api-types.js'
@@ -181,7 +181,7 @@ export const persona = Cli.create('persona', {
       }
 
       if (c.options.project) {
-        const state = await api.get<import('../api-types.js').ApiStateOverride>('/api/v1/state/override', {
+        const state = await getStateOverride(api, {
           project: basename(process.cwd()),
         })
         if (state.persona_slug === undefined) return { active: false, scope: 'project', note: 'No project persona override (cascades from workspace)' }
