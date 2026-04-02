@@ -36,21 +36,21 @@ brainjar status
 ## Commands
 
 ```
-brainjar init [--default] [--obsidian] [--backend claude|codex]
-brainjar status [--sync] [--global|--local] [--short]
+brainjar init [--default] [--backend claude|codex]
+brainjar status [--sync] [--workspace] [--project] [--short]
 brainjar sync [--quiet]
-brainjar compose <brain> [--task <text>]
+brainjar compose <brain> [--persona <name>] [--task <text>]
 
 brainjar brain save|use|list|show|drop
-brainjar soul create|list|show|use|drop
-brainjar persona create|list|show|use|drop
-brainjar rules create|list|show|add|remove
+brainjar soul create|use|show|list|drop
+brainjar persona create|use|show|list|drop
+brainjar rules create|add|remove|show|list
 
 brainjar pack export|import
 brainjar hooks install|remove|status [--local]
-brainjar shell [--brain|--soul|--persona|--rules-add|--rules-remove]
+brainjar shell [--brain <name>] [--soul <name>] [--persona <name>]
 brainjar reset [--backend claude|codex]
-brainjar server start|stop|status|logs|local|remote
+brainjar server start|stop|status|logs|local|remote|upgrade
 brainjar migrate [--dry-run] [--skip-backup]
 ```
 

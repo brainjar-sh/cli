@@ -8,10 +8,11 @@ brainjar manages composable configuration layers for coding agents. The operator
 
 ## Key concepts
 
-- **Soul** — your personality and values. A markdown file in `~/.brainjar/souls/`. One active at a time.
-- **Persona** — role behavior and workflow. A markdown file in `~/.brainjar/personas/`. One active at a time. Personas declare default rules via frontmatter.
-- **Rules** — behavioral constraints. Multiple can be active simultaneously. Files or directories in `~/.brainjar/rules/`.
-- **State** — `~/.brainjar/state.yaml` tracks which soul, persona, and rules are active.
+- **Soul** — your personality and values. Markdown content stored on the brainjar server. One active at a time.
+- **Persona** — role behavior and workflow. Markdown content on the server. One active at a time. Personas can bundle default rules.
+- **Rules** — behavioral constraints. Multiple can be active simultaneously. Markdown content on the server.
+- **Brain** — saved snapshot of soul + persona + rules. Activate in one shot.
+- **State** — tracks which soul, persona, and rules are active (workspace and project scopes).
 - **Backend** — the agent platform being configured (e.g. `claude`, `codex`). Only relevant for `init` and `reset`.
 
 ## Discovering commands
@@ -63,11 +64,11 @@ brainjar brain drop old-workflow          # delete a brain
 
 ### Project-level overrides
 
-Use `--local` to write to `.brainjar/state.yaml` in the current project, overriding global config:
+Use `--project` to write to `.brainjar/state.yaml` in the current project, overriding workspace config:
 
 ```bash
-brainjar persona use reviewer --local
-brainjar rules add security --local
+brainjar persona use reviewer --project
+brainjar rules add security --project
 ```
 
 ### Viewing specific layers
@@ -99,7 +100,7 @@ For more granular control, retrieve layers individually:
 ```bash
 brainjar soul show                    # get active soul
 brainjar persona show architect       # get persona content + its bundled rules
-brainjar rules show default           # get rule content
+brainjar rules show boundaries        # get rule content
 ```
 
 ## Important notes

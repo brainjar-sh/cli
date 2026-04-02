@@ -48,7 +48,7 @@ export const persona = Cli.create('persona', {
         }
       }
 
-      const effectiveRules = rulesList.length > 0 ? rulesList : ['default']
+      const effectiveRules = rulesList
 
       const lines: string[] = []
       lines.push(`# ${name}`)
