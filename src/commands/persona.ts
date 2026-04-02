@@ -291,7 +291,7 @@ export const persona = Cli.create('persona', {
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
-      await putState(api, { persona_slug: null }, mutationOpts)
+      await putState(api, { persona_slug: '' }, mutationOpts)
 
       await sync({ api })
       if (c.options.project) await sync({ api, project: true })

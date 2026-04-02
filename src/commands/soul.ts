@@ -249,7 +249,7 @@ export const soul = Cli.create('soul', {
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
-      await putState(api, { soul_slug: null }, mutationOpts)
+      await putState(api, { soul_slug: '' }, mutationOpts)
 
       await sync({ api })
       if (c.options.project) await sync({ api, project: true })

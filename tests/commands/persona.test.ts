@@ -98,12 +98,12 @@ describe('persona commands', () => {
     expect(parsed.deactivated).toBe(true)
   })
 
-  test('drop sends null persona mutation to server', async () => {
+  test('drop sends empty string persona mutation to server', async () => {
     seedPersona('coder', '# Coder')
     setState({ persona: 'coder' })
     await run(persona, ['drop', '--format', 'json'])
-    expect(store.lastMutation).toEqual({ persona_slug: null })
-    expect(store.effectiveState.persona).toBeNull()
+    expect(store.lastMutation).toEqual({ persona_slug: '' })
+    expect(store.effectiveState.persona).toBe('')
   })
 
   test('drop succeeds even when no active persona', async () => {

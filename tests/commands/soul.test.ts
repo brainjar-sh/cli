@@ -96,12 +96,12 @@ describe('soul commands', () => {
     expect(parsed.deactivated).toBe(true)
   })
 
-  test('drop sends null soul mutation to server', async () => {
+  test('drop sends empty string soul mutation to server', async () => {
     seedSoul('warrior', '# Warrior')
     setState({ soul: 'warrior' })
     await run(soul, ['drop', '--format', 'json'])
-    expect(store.lastMutation).toEqual({ soul_slug: null })
-    expect(store.effectiveState.soul).toBeNull()
+    expect(store.lastMutation).toEqual({ soul_slug: '' })
+    expect(store.effectiveState.soul).toBe('')
   })
 
   test('drop succeeds even when no active soul', async () => {

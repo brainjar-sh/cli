@@ -170,7 +170,7 @@ export const brain = Cli.create('brain', {
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
-      await putState(api, { soul_slug: null, persona_slug: null, rule_slugs: [] }, mutationOpts)
+      await putState(api, { soul_slug: '', persona_slug: '', rule_slugs: [] }, mutationOpts)
 
       await sync({ api })
       if (c.options.project) await sync({ api, project: true })
