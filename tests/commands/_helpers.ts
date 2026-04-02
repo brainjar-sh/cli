@@ -9,6 +9,7 @@ export interface MockStore {
   personas: Map<string, { slug: string; title: string | null; content: string; bundled_rules: string[] }>
   rules: Map<string, { slug: string; entries: { name: string; content: string }[] }>
   brains: Map<string, { slug: string; soul_slug: string; persona_slug: string; rule_slugs: string[] }>
+  workspaces: Set<string>
   effectiveState: {
     soul: string | null
     persona: string | null
@@ -30,6 +31,7 @@ export function resetStore() {
     personas: new Map(),
     rules: new Map(),
     brains: new Map(),
+    workspaces: new Set(),
     effectiveState: {
       soul: null,
       persona: null,
@@ -310,7 +312,14 @@ export function startMockServer() {
 
       // ─── Workspaces endpoint ────────────────────────────────────
       if (path === '/api/v1/workspaces' && method === 'POST') {
-        return Response.json({ id: 'test-ws-id', name: 'default' }, { status: 201 })
+        return (async () => {
+          const body = await req.json() as { name: string }
+          if (store.workspaces.has(body.name)) {
+            return Response.json({ error: 'Workspace already exists', code: 'CONFLICT' }, { status: 409 })
+          }
+          store.workspaces.add(body.name)
+          return Response.json({ id: 'test-ws-id', name: body.name }, { status: 201 })
+        })()
       }
 
       return Response.json({ error: 'Not found' }, { status: 404 })

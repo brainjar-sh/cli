@@ -96,4 +96,21 @@ describe('server remote', () => {
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe(ErrorCode.SERVER_UNREACHABLE)
   })
+
+  test('switches to remote and syncs', async () => {
+    const { mockServerUrl: url } = await import('./_helpers.js')
+    const { exitCode, parsed } = await run(server, ['remote', url, '--format', 'json'])
+    expect(exitCode).toBeUndefined()
+    expect(parsed.mode).toBe('remote')
+    expect(parsed.url).toBe(url)
+  })
+
+  test('handles workspace already existing', async () => {
+    const { mockServerUrl: url } = await import('./_helpers.js')
+    // Run twice — second time workspace already exists (CONFLICT)
+    await run(server, ['remote', url, '--format', 'json'])
+    const { exitCode, parsed } = await run(server, ['remote', url, '--format', 'json'])
+    expect(exitCode).toBeUndefined()
+    expect(parsed.mode).toBe('remote')
+  })
 })

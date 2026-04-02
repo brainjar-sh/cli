@@ -115,6 +115,14 @@ const localCmd = Cli.create('local', {
     await ensureRunning()
 
     const api = await getApi()
+
+    // Ensure workspace exists (ignore conflict if already created)
+    try {
+      await api.post('/api/v1/workspaces', { name: config.workspace })
+    } catch (e: any) {
+      if (e.code !== 'CONFLICT') throw e
+    }
+
     await sync({ api })
 
     return { mode: 'local', url: config.server.url }
@@ -140,6 +148,14 @@ const remoteCmd = Cli.create('remote', {
     await writeConfig(config)
 
     const api = await getApi()
+
+    // Ensure workspace exists (ignore conflict if already created)
+    try {
+      await api.post('/api/v1/workspaces', { name: config.workspace })
+    } catch (e: any) {
+      if (e.code !== 'CONFLICT') throw e
+    }
+
     await sync({ api })
 
     return { mode: 'remote', url }
