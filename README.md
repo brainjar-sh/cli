@@ -1,6 +1,6 @@
 # brainjar
 
-[![CI](https://github.com/brainjar-sh/brainjar-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/brainjar-sh/brainjar-cli/actions/workflows/ci.yml)
+[![CI](https://github.com/brainjar-sh/cli/actions/workflows/ci.yml/badge.svg)](https://github.com/brainjar-sh/cli/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@brainjar/cli)](https://www.npmjs.com/package/@brainjar/cli)
 [![downloads](https://img.shields.io/npm/dm/@brainjar/cli)](https://www.npmjs.com/package/@brainjar/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

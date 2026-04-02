@@ -6,10 +6,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/brainjar-sh/brainjar-cli.git"
+    "url": "https://github.com/brainjar-sh/cli.git"
   },
   "homepage": "https://brainjar.sh",
-  "bugs": "https://github.com/brainjar-sh/brainjar-cli/issues",
+  "bugs": "https://github.com/brainjar-sh/cli/issues",
   "keywords": [
     "ai",
     "agent",

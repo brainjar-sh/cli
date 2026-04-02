@@ -6,7 +6,7 @@ Thanks for your interest in contributing.
 
 ```bash
 # Clone the repo
-git clone https://github.com/brainjar-sh/brainjar-cli.git
+git clone https://github.com/brainjar-sh/cli.git
 cd brainjar-cli
 
 # Install dependencies (requires Bun)
