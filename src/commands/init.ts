@@ -49,7 +49,11 @@ export const init = Cli.create('init', {
     await ensureBinary()
     const config = await readConfig()
     if (config.server.mode === 'local') {
-      await upgradeServer()
+      // Only upgrade if server isn't already running (can't overwrite a running binary)
+      const health = await (await import('../daemon.js')).healthCheck({ timeout: 1000, url: config.server.url })
+      if (!health.healthy) {
+        await upgradeServer()
+      }
     }
 
     // 4. Start server and get API client
@@ -70,7 +74,7 @@ export const init = Cli.create('init', {
       await putState(api, {
         soul_slug: 'craftsman',
         persona_slug: 'engineer',
-        rule_slugs: ['default', 'git-discipline', 'security'],
+        rule_slugs: ['boundaries', 'context-recovery', 'task-completion', 'git-discipline', 'security'],
       })
     }
 
@@ -86,7 +90,7 @@ export const init = Cli.create('init', {
     if (c.options.default) {
       result.soul = 'craftsman'
       result.persona = 'engineer'
-      result.rules = ['default', 'git-discipline', 'security']
+      result.rules = ['boundaries', 'context-recovery', 'task-completion', 'git-discipline', 'security']
       result.personas = ['engineer', 'planner', 'reviewer']
       result.next = 'Ready to go. Run `brainjar status` to see your config.'
     } else {

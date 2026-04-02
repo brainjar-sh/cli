@@ -1,6 +1,6 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ContentBundle, BundleRuleEntry } from './api-types.js'
+import type { ContentBundle } from './api-types.js'
 import { parseFrontmatter } from './migrate.js'
 
 const SEEDS_DIR = join(import.meta.dir, 'seeds')
@@ -19,26 +19,22 @@ export async function buildSeedBundle(): Promise<ContentBundle> {
     engineerContent,
     plannerContent,
     reviewerContent,
+    boundariesContent,
+    contextRecoveryContent,
+    taskCompletionContent,
     gitDisciplineContent,
     securityContent,
-    defaultRuleFiles,
   ] = await Promise.all([
     readSeed('souls/craftsman.md'),
     readSeed('personas/engineer.md'),
     readSeed('personas/planner.md'),
     readSeed('personas/reviewer.md'),
+    readSeed('rules/boundaries.md'),
+    readSeed('rules/context-recovery.md'),
+    readSeed('rules/task-completion.md'),
     readSeed('rules/git-discipline.md'),
     readSeed('rules/security.md'),
-    readdir(join(SEEDS_DIR, 'rules', 'default')),
   ])
-
-  const defaultMdFiles = defaultRuleFiles.filter(f => f.endsWith('.md')).sort()
-  const defaultEntries: BundleRuleEntry[] = await Promise.all(
-    defaultMdFiles.map(async (file, i) => ({
-      sort_key: i,
-      content: await readSeed(join('rules', 'default', file)),
-    }))
-  )
 
   const engineerParsed = parseFrontmatter(engineerContent)
   const plannerParsed = parseFrontmatter(plannerContent)
@@ -67,7 +63,9 @@ export async function buildSeedBundle(): Promise<ContentBundle> {
       },
     },
     rules: {
-      default: { entries: defaultEntries },
+      boundaries: { entries: [{ sort_key: 0, content: boundariesContent }] },
+      'context-recovery': { entries: [{ sort_key: 0, content: contextRecoveryContent }] },
+      'task-completion': { entries: [{ sort_key: 0, content: taskCompletionContent }] },
       'git-discipline': { entries: [{ sort_key: 0, content: gitDisciplineContent }] },
       security: { entries: [{ sort_key: 0, content: securityContent }] },
     },
