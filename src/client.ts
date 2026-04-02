@@ -103,14 +103,25 @@ export async function createClient(options?: ClientOptions): Promise<BrainjarCli
     }
 
     if (!response.ok) {
-      let serverError: { error?: string; code?: string } | null = null
+      let serverError: { error?: string | { code?: string; message?: string }; code?: string; message?: string } | null = null
       try {
         serverError = await response.json()
       } catch {}
 
       const mapped = ERROR_MAP[response.status]
-      const code = serverError?.code ?? mapped?.code ?? ErrorCode.API_ERROR
-      const message = serverError?.error ?? `Server returned ${response.status}`
+
+      // Handle both flat { error: "msg", code: "X" } and nested { error: { code: "X", message: "msg" } }
+      let code: string
+      let message: string
+      if (serverError?.error && typeof serverError.error === 'object') {
+        code = serverError.error.code ?? mapped?.code ?? ErrorCode.API_ERROR
+        message = serverError.error.message ?? `Server returned ${response.status}`
+      } else {
+        code = serverError?.code ?? mapped?.code ?? ErrorCode.API_ERROR
+        message = (typeof serverError?.error === 'string' ? serverError.error : null)
+          ?? serverError?.message
+          ?? `Server returned ${response.status}`
+      }
       const hint = mapped?.hint
 
       throw new IncurError({ code, message, hint })

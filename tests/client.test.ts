@@ -32,6 +32,13 @@ beforeAll(() => {
         return Response.json({ error: 'Internal error' }, { status: 500 })
       }
 
+      if (url.pathname === '/api/v1/nested-error') {
+        return Response.json(
+          { error: { code: 'NOT_FOUND', message: 'workspace not found: personal' } },
+          { status: 404 },
+        )
+      }
+
       if (url.pathname === '/api/v1/slow') {
         return new Promise(resolve => {
           setTimeout(() => resolve(Response.json({ ok: true })), 5000)
@@ -119,6 +126,17 @@ describe('createClient', () => {
       expect(true).toBe(false)
     } catch (e: any) {
       expect(e.code).toBe(ErrorCode.TIMEOUT)
+    }
+  })
+
+  test('extracts message from nested error response', async () => {
+    const api = await createClient()
+    try {
+      await api.get('/api/v1/nested-error')
+      expect(true).toBe(false)
+    } catch (e: any) {
+      expect(e.code).toBe('NOT_FOUND')
+      expect(e.message).toContain('workspace not found: personal')
     }
   })
 
