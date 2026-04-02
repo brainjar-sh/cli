@@ -17,6 +17,7 @@ export const persona = Cli.create('persona', {
       name: z.string().describe('Persona name'),
     }),
     options: z.object({
+      content: z.string().optional().describe('Persona content (if omitted, creates with a starter template you can edit)'),
       description: z.string().optional().describe('One-line description of the persona'),
       rules: z.array(z.string()).optional().describe('Rules to bundle with this persona'),
     }),
@@ -50,24 +51,29 @@ export const persona = Cli.create('persona', {
 
       const effectiveRules = rulesList
 
-      const lines: string[] = []
-      lines.push(`# ${name}`)
-      lines.push('')
-      if (c.options.description) {
-        lines.push(c.options.description)
+      let content: string
+      if (c.options.content) {
+        content = c.options.content.trim()
+      } else {
+        const lines: string[] = []
+        lines.push(`# ${name}`)
+        lines.push('')
+        if (c.options.description) {
+          lines.push(c.options.description)
+        }
+        lines.push('')
+        lines.push('## Direct mode')
+        lines.push('- ')
+        lines.push('')
+        lines.push('## Subagent mode')
+        lines.push('- ')
+        lines.push('')
+        lines.push('## Always')
+        lines.push('- ')
+        lines.push('')
+        content = lines.join('\n')
       }
-      lines.push('')
-      lines.push('## Direct mode')
-      lines.push('- ')
-      lines.push('')
-      lines.push('## Subagent mode')
-      lines.push('- ')
-      lines.push('')
-      lines.push('## Always')
-      lines.push('- ')
-      lines.push('')
 
-      const content = lines.join('\n')
       await api.put<ApiPersona>(`/api/v1/personas/${name}`, {
         content,
         bundled_rules: effectiveRules,
@@ -87,11 +93,12 @@ export const persona = Cli.create('persona', {
     },
   })
   .command('update', {
-    description: 'Update a persona\'s content (reads from stdin)',
+    description: 'Update a persona\'s content (reads from stdin or --content)',
     args: z.object({
       name: z.string().describe('Persona name'),
     }),
     options: z.object({
+      content: z.string().optional().describe('Persona content (reads from stdin if omitted)'),
       rules: z.array(z.string()).optional().describe('Update bundled rules'),
     }),
     async run(c) {
@@ -109,11 +116,14 @@ export const persona = Cli.create('persona', {
         throw e
       }
 
-      const chunks: Uint8Array[] = []
-      for await (const chunk of Bun.stdin.stream()) {
-        chunks.push(chunk)
+      let content = c.options.content?.trim()
+      if (!content) {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of Bun.stdin.stream()) {
+          chunks.push(chunk)
+        }
+        content = Buffer.concat(chunks).toString().trim()
       }
-      const content = Buffer.concat(chunks).toString().trim()
 
       // Validate rules if provided
       const rulesList = c.options.rules

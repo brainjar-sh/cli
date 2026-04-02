@@ -17,6 +17,7 @@ export const rules = Cli.create('rules', {
       name: z.string().describe('Rule name'),
     }),
     options: z.object({
+      content: z.string().optional().describe('Rule content (if omitted, creates with a starter template you can edit)'),
       description: z.string().optional().describe('One-line description of the rule'),
     }),
     async run(c) {
@@ -32,15 +33,20 @@ export const rules = Cli.create('rules', {
         if (e instanceof IncurError && e.code !== ErrorCode.NOT_FOUND) throw e
       }
 
-      const scaffold = [
-        `# ${name}`,
-        '',
-        c.options.description ?? 'Describe what this rule enforces and why.',
-        '',
-        '## Constraints',
-        '- ',
-        '',
-      ].join('\n')
+      let scaffold: string
+      if (c.options.content) {
+        scaffold = c.options.content.trim()
+      } else {
+        scaffold = [
+          `# ${name}`,
+          '',
+          c.options.description ?? 'Describe what this rule enforces and why.',
+          '',
+          '## Constraints',
+          '- ',
+          '',
+        ].join('\n')
+      }
 
       await api.put<ApiRule>(`/api/v1/rules/${name}`, {
         entries: [{ name: `${name}.md`, content: scaffold }],
@@ -59,9 +65,12 @@ export const rules = Cli.create('rules', {
     },
   })
   .command('update', {
-    description: 'Update a rule\'s content (reads from stdin)',
+    description: 'Update a rule\'s content (reads from stdin or --content)',
     args: z.object({
       name: z.string().describe('Rule name'),
+    }),
+    options: z.object({
+      content: z.string().optional().describe('Rule content (reads from stdin if omitted)'),
     }),
     async run(c) {
       const name = normalizeSlug(c.args.name, 'rule name')
@@ -77,11 +86,14 @@ export const rules = Cli.create('rules', {
         throw e
       }
 
-      const chunks: Uint8Array[] = []
-      for await (const chunk of Bun.stdin.stream()) {
-        chunks.push(chunk)
+      let content = c.options.content?.trim()
+      if (!content) {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of Bun.stdin.stream()) {
+          chunks.push(chunk)
+        }
+        content = Buffer.concat(chunks).toString().trim()
       }
-      const content = Buffer.concat(chunks).toString().trim()
 
       if (!content) {
         throw createError(ErrorCode.MISSING_ARG, {

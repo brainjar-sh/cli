@@ -17,6 +17,7 @@ export const soul = Cli.create('soul', {
       name: z.string().describe('Soul name'),
     }),
     options: z.object({
+      content: z.string().optional().describe('Soul content (if omitted, creates with a starter template you can edit)'),
       description: z.string().optional().describe('One-line description of the soul'),
     }),
     async run(c) {
@@ -32,24 +33,29 @@ export const soul = Cli.create('soul', {
         if (e instanceof IncurError && e.code !== ErrorCode.NOT_FOUND) throw e
       }
 
-      const lines: string[] = []
-      lines.push(`# ${name}`)
-      lines.push('')
-      if (c.options.description) {
-        lines.push(c.options.description)
+      let content: string
+      if (c.options.content) {
+        content = c.options.content.trim()
+      } else {
+        const lines: string[] = []
+        lines.push(`# ${name}`)
         lines.push('')
+        if (c.options.description) {
+          lines.push(c.options.description)
+          lines.push('')
+        }
+        lines.push('## Voice')
+        lines.push('- ')
+        lines.push('')
+        lines.push('## Character')
+        lines.push('- ')
+        lines.push('')
+        lines.push('## Standards')
+        lines.push('- ')
+        lines.push('')
+        content = lines.join('\n')
       }
-      lines.push('## Voice')
-      lines.push('- ')
-      lines.push('')
-      lines.push('## Character')
-      lines.push('- ')
-      lines.push('')
-      lines.push('## Standards')
-      lines.push('- ')
-      lines.push('')
 
-      const content = lines.join('\n')
       await api.put<ApiSoul>(`/api/v1/souls/${name}`, { content })
 
       if (c.agent || c.formatExplicit) {
@@ -65,9 +71,12 @@ export const soul = Cli.create('soul', {
     },
   })
   .command('update', {
-    description: 'Update a soul\'s content (reads from stdin)',
+    description: 'Update a soul\'s content (reads from stdin or --content)',
     args: z.object({
       name: z.string().describe('Soul name'),
+    }),
+    options: z.object({
+      content: z.string().optional().describe('Soul content (reads from stdin if omitted)'),
     }),
     async run(c) {
       const name = normalizeSlug(c.args.name, 'soul name')
@@ -83,11 +92,14 @@ export const soul = Cli.create('soul', {
         throw e
       }
 
-      const chunks: Uint8Array[] = []
-      for await (const chunk of Bun.stdin.stream()) {
-        chunks.push(chunk)
+      let content = c.options.content?.trim()
+      if (!content) {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of Bun.stdin.stream()) {
+          chunks.push(chunk)
+        }
+        content = Buffer.concat(chunks).toString().trim()
       }
-      const content = Buffer.concat(chunks).toString().trim()
 
       if (!content) {
         throw createError(ErrorCode.MISSING_ARG, {
