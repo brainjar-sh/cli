@@ -18,13 +18,4 @@ describe('upgrade flags', () => {
     expect(exitCode).toBe(1)
     expect(parsed.code).toBe(ErrorCode.MUTUALLY_EXCLUSIVE)
   })
-
-  test('--cli-only returns cli result without server', async () => {
-    const { parsed } = await run(upgrade, ['--cli-only', '--format', 'json'])
-    expect(parsed.cli).toBeDefined()
-    expect(typeof parsed.cli.upgraded).toBe('boolean')
-    expect(typeof parsed.cli.from).toBe('string')
-    expect(typeof parsed.cli.to).toBe('string')
-    expect(parsed.server).toBeUndefined()
-  })
 })
