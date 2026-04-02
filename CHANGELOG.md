@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.5.1
+
+### Patch Changes
+
+- 9c7e1c2: Fix version compatibility check failing on pre-release server versions (e.g. `v0.2.2-dev`).
+
 ## 0.5.0
 
 ### Minor Changes
