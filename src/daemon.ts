@@ -14,7 +14,7 @@ export const DIST_BASE = 'https://get.brainjar.sh/brainjar-server'
  * Strips leading 'v' prefix. Only compares major.minor.patch.
  */
 export function compareSemver(a: string, b: string): number {
-  const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number)
+  const parse = (v: string) => v.replace(/^v/, '').replace(/-.*$/, '').split('.').map(Number)
   const pa = parse(a)
   const pb = parse(b)
   for (let i = 0; i < 3; i++) {
