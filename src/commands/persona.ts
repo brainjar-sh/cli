@@ -6,7 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
-import type { ApiPersona, ApiPersonaList, ApiRuleList } from '../api-types.js'
+import type { ApiPersona, ApiPersonaList, ApiRuleList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const persona = Cli.create('persona', {
   description: 'Manage personas — role behavior and workflow for the agent',
@@ -167,6 +167,7 @@ export const persona = Cli.create('persona', {
     options: z.object({
       project: z.boolean().default(false).describe('Show project persona override (if any)'),
       short: z.boolean().default(false).describe('Print only the active persona name'),
+      version: z.number().optional().describe('Show a specific version from history'),
     }),
     async run(c) {
       const api = await getApi()
@@ -175,6 +176,14 @@ export const persona = Cli.create('persona', {
         if (c.args.name) return c.args.name
         const state = await getEffectiveState(api)
         return state.persona ?? 'none'
+      }
+
+      if (c.options.version) {
+        const name = c.args.name
+        if (!name) throw createError(ErrorCode.MISSING_ARG, { message: 'Name is required when using --version' })
+        const slug = normalizeSlug(name, 'persona name')
+        const v = await api.get<ApiContentVersion>(`/api/v1/personas/${slug}/versions/${c.options.version}`)
+        return { name: slug, version: v.version, content: v.content, metadata: v.metadata, created_at: v.created_at }
       }
 
       if (c.args.name) {
@@ -212,6 +221,40 @@ export const persona = Cli.create('persona', {
       } catch {
         return { active: false, name: state.persona, error: 'Not found on server' }
       }
+    },
+  })
+  .command('history', {
+    description: 'List version history for a persona',
+    args: z.object({
+      name: z.string().describe('Persona name'),
+    }),
+    async run(c) {
+      const name = normalizeSlug(c.args.name, 'persona name')
+      const api = await getApi()
+      const result = await api.get<ApiVersionList>(`/api/v1/personas/${name}/versions`)
+      return { name, versions: result.versions }
+    },
+  })
+  .command('revert', {
+    description: 'Restore a persona to a previous version',
+    args: z.object({
+      name: z.string().describe('Persona name'),
+    }),
+    options: z.object({
+      to: z.number().describe('Version number to restore'),
+    }),
+    async run(c) {
+      const name = normalizeSlug(c.args.name, 'persona name')
+      const api = await getApi()
+      const v = await api.get<ApiContentVersion>(`/api/v1/personas/${name}/versions/${c.options.to}`)
+      if (!v.content) throw createError(ErrorCode.BAD_REQUEST, { message: 'Version has no content to restore' })
+      const bundledRules = (v.metadata as { bundled_rules?: string[] })?.bundled_rules ?? []
+      await api.put<ApiPersona>(`/api/v1/personas/${name}`, { content: v.content, bundled_rules: bundledRules })
+
+      const state = await getEffectiveState(api)
+      if (state.persona === name) await sync({ api })
+
+      return { reverted: name, to_version: c.options.to }
     },
   })
   .command('use', {

@@ -6,7 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
-import type { ApiSoul, ApiSoulList } from '../api-types.js'
+import type { ApiSoul, ApiSoulList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const soul = Cli.create('soul', {
   description: 'Manage soul — personality and values for the agent',
@@ -133,6 +133,7 @@ export const soul = Cli.create('soul', {
     options: z.object({
       project: z.boolean().default(false).describe('Show project soul override (if any)'),
       short: z.boolean().default(false).describe('Print only the active soul name'),
+      version: z.number().optional().describe('Show a specific version from history'),
     }),
     async run(c) {
       const api = await getApi()
@@ -141,6 +142,14 @@ export const soul = Cli.create('soul', {
         if (c.args.name) return c.args.name
         const state = await getEffectiveState(api)
         return state.soul ?? 'none'
+      }
+
+      if (c.options.version) {
+        const name = c.args.name
+        if (!name) throw createError(ErrorCode.MISSING_ARG, { message: 'Name is required when using --version' })
+        const slug = normalizeSlug(name, 'soul name')
+        const v = await api.get<ApiContentVersion>(`/api/v1/souls/${slug}/versions/${c.options.version}`)
+        return { name: slug, version: v.version, content: v.content, created_at: v.created_at }
       }
 
       if (c.args.name) {
@@ -178,6 +187,39 @@ export const soul = Cli.create('soul', {
       } catch {
         return { active: false, name: state.soul, error: 'Not found on server' }
       }
+    },
+  })
+  .command('history', {
+    description: 'List version history for a soul',
+    args: z.object({
+      name: z.string().describe('Soul name'),
+    }),
+    async run(c) {
+      const name = normalizeSlug(c.args.name, 'soul name')
+      const api = await getApi()
+      const result = await api.get<ApiVersionList>(`/api/v1/souls/${name}/versions`)
+      return { name, versions: result.versions }
+    },
+  })
+  .command('revert', {
+    description: 'Restore a soul to a previous version',
+    args: z.object({
+      name: z.string().describe('Soul name'),
+    }),
+    options: z.object({
+      to: z.number().describe('Version number to restore'),
+    }),
+    async run(c) {
+      const name = normalizeSlug(c.args.name, 'soul name')
+      const api = await getApi()
+      const v = await api.get<ApiContentVersion>(`/api/v1/souls/${name}/versions/${c.options.to}`)
+      if (!v.content) throw createError(ErrorCode.BAD_REQUEST, { message: 'Version has no content to restore' })
+      await api.put<ApiSoul>(`/api/v1/souls/${name}`, { content: v.content })
+
+      const state = await getEffectiveState(api)
+      if (state.soul === name) await sync({ api })
+
+      return { reverted: name, to_version: c.options.to }
     },
   })
   .command('use', {

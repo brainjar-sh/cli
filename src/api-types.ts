@@ -107,6 +107,27 @@ export interface ApiComposeResult {
   warnings?: string[]
 }
 
+// --- Content version types ---
+
+export interface ApiVersionSummary {
+  version: number
+  created_at: string
+}
+
+export interface ApiVersionList {
+  versions: ApiVersionSummary[]
+}
+
+export interface ApiContentVersion {
+  id: string
+  content_type: string
+  slug: string
+  version: number
+  content: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
 // --- Content bundle types (export/import) ---
 
 export interface BundleSoul {

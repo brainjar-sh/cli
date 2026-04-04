@@ -6,7 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi } from '../client.js'
-import type { ApiRule, ApiRuleList } from '../api-types.js'
+import type { ApiRule, ApiRuleList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const rules = Cli.create('rules', {
   description: 'Manage rules — behavioral constraints for the agent',
@@ -145,9 +145,19 @@ export const rules = Cli.create('rules', {
     args: z.object({
       name: z.string().describe('Rule name to show'),
     }),
+    options: z.object({
+      version: z.number().optional().describe('Show a specific version from history'),
+    }),
     async run(c) {
       const name = normalizeSlug(c.args.name, 'rule name')
       const api = await getApi()
+
+      if (c.options.version) {
+        const v = await api.get<ApiContentVersion>(`/api/v1/rules/${name}/versions/${c.options.version}`)
+        const entries = (v.metadata as { entries?: Array<{ sort_key: number; content: string }> })?.entries ?? []
+        const content = entries.map(e => e.content.trim()).join('\n\n')
+        return { name, version: v.version, content, created_at: v.created_at }
+      }
 
       try {
         const rule = await api.get<ApiRule>(`/api/v1/rules/${name}`)
@@ -159,6 +169,40 @@ export const rules = Cli.create('rules', {
         }
         throw e
       }
+    },
+  })
+  .command('history', {
+    description: 'List version history for a rule',
+    args: z.object({
+      name: z.string().describe('Rule name'),
+    }),
+    async run(c) {
+      const name = normalizeSlug(c.args.name, 'rule name')
+      const api = await getApi()
+      const result = await api.get<ApiVersionList>(`/api/v1/rules/${name}/versions`)
+      return { name, versions: result.versions }
+    },
+  })
+  .command('revert', {
+    description: 'Restore a rule to a previous version',
+    args: z.object({
+      name: z.string().describe('Rule name'),
+    }),
+    options: z.object({
+      to: z.number().describe('Version number to restore'),
+    }),
+    async run(c) {
+      const name = normalizeSlug(c.args.name, 'rule name')
+      const api = await getApi()
+      const v = await api.get<ApiContentVersion>(`/api/v1/rules/${name}/versions/${c.options.to}`)
+      const entries = (v.metadata as { entries?: Array<{ sort_key: number; content: string }> })?.entries
+      if (!entries) throw createError(ErrorCode.BAD_REQUEST, { message: 'Version has no entries to restore' })
+      await api.put<ApiRule>(`/api/v1/rules/${name}`, { entries: entries.map(e => ({ name: `${name}.md`, content: e.content })) })
+
+      const state = await getEffectiveState(api)
+      if (state.rules.includes(name)) await sync({ api })
+
+      return { reverted: name, to_version: c.options.to }
     },
   })
   .command('add', {
