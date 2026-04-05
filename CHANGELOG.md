@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.7.1
+
+### Patch Changes
+
+- 6ff0732: Show progress bar when downloading server binary (TTY only)
+
 ## 0.7.0
 
 ### Minor Changes
