@@ -1,5 +1,12 @@
 # brainjar
 
+## 0.6.4
+
+### Patch Changes
+
+- 7e19348: Fix server stop/upgrade killing process group so embedded postgres doesn't orphan
+- 549f107: Handle referential integrity warnings: delete commands show affected brains when server returns them
+
 ## 0.6.3
 
 ### Patch Changes
