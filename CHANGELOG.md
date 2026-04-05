@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.6.2
+
+### Patch Changes
+
+- 7129c9e: Add auth support: token resolution, API key management commands, and context set-token
+
 ## 0.6.1
 
 ### Patch Changes
