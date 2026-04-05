@@ -279,6 +279,18 @@ export async function upgradeServer(): Promise<{ version: string; alreadyLatest:
   const pid = await readPid(localContext(config).pid_file)
   if (pid !== null && isAlive(pid)) {
     await stop()
+
+    // Verify process is actually dead before replacing binary
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline && isAlive(pid)) {
+      await new Promise(r => setTimeout(r, 100))
+    }
+    if (isAlive(pid)) {
+      throw createError(ErrorCode.SERVER_START_FAILED, {
+        message: `Server process (PID ${pid}) is still running. Cannot replace binary.`,
+        hint: `Kill it manually: kill -9 ${pid}`,
+      })
+    }
   }
 
   const versionBase = `${DIST_BASE}/${version}`
@@ -351,7 +363,14 @@ export async function stop(): Promise<{ stopped: boolean }> {
     return { stopped: false }
   }
 
-  process.kill(pid, 'SIGTERM')
+  // Kill entire process group (negative pid) so child processes
+  // like embedded postgres are also terminated.
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    // Process group doesn't exist — try single process
+    try { process.kill(pid, 'SIGTERM') } catch {}
+  }
 
   // Poll for exit, up to 5s
   const deadline = Date.now() + 5000
@@ -363,10 +382,15 @@ export async function stop(): Promise<{ stopped: boolean }> {
     }
   }
 
-  // Force kill
+  // Force kill entire process group
   try {
-    process.kill(pid, 'SIGKILL')
-  } catch {}
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    try { process.kill(pid, 'SIGKILL') } catch {}
+  }
+
+  // Wait briefly for SIGKILL to take effect
+  await new Promise(r => setTimeout(r, 500))
   await rm(pid_file, { force: true })
   return { stopped: true }
 }
