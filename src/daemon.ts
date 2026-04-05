@@ -31,7 +31,7 @@ const { IncurError } = Errors
  * Minimum server version this CLI is compatible with.
  * Bump when the CLI depends on server features/API changes.
  */
-export const MIN_SERVER_VERSION = '0.2.7'
+export const MIN_SERVER_VERSION = '0.3.0'
 
 export interface HealthStatus {
   healthy: boolean
@@ -327,7 +327,7 @@ export async function start(): Promise<{ pid: number }> {
   const child = spawn(bin, [], {
     detached: true,
     stdio: ['ignore', logFd.fd, logFd.fd],
-    env: { ...process.env, PORT: port, BRAINJAR_POSTGRES_EMBEDDED: 'true' },
+    env: { ...process.env, PORT: port },
   })
 
   const pid = child.pid
@@ -362,7 +362,7 @@ export async function stop(): Promise<{ stopped: boolean }> {
   }
 
   // Kill entire process group (negative pid) so child processes
-  // like embedded postgres are also terminated.
+  // are also terminated.
   try {
     process.kill(-pid, 'SIGTERM')
   } catch {
@@ -504,6 +504,17 @@ export async function ensureRunning(): Promise<void> {
       assertCompatible(check.serverVersion)
       return
     }
+  }
+
+  // Tail logs to detect why the server failed
+  const logs = await readLogFile({ lines: 20 })
+  if (logs.includes('failed to connect to postgres') || logs.includes('ensure database')) {
+    throw createError(ErrorCode.SERVER_START_FAILED, {
+      message: 'Server failed to start: could not connect to Postgres. '
+        + 'Run: docker run -d --name brainjar-pg -p 2724:5432 '
+        + '-e POSTGRES_USER=brainjar -e POSTGRES_PASSWORD=brainjar postgres:17',
+      hint: 'Then retry: `brainjar init`',
+    })
   }
 
   throw createError(ErrorCode.SERVER_START_FAILED, {
