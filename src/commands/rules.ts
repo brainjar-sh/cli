@@ -146,14 +146,14 @@ export const rules = Cli.create('rules', {
       name: z.string().describe('Rule name to show'),
     }),
     options: z.object({
-      version: z.number().optional().describe('Show a specific version from history'),
+      rev: z.number().optional().describe('Show a specific version from history'),
     }),
     async run(c) {
       const name = normalizeSlug(c.args.name, 'rule name')
       const api = await getApi()
 
-      if (c.options.version) {
-        const v = await api.get<ApiContentVersion>(`/api/v1/rules/${name}/versions/${c.options.version}`)
+      if (c.options.rev) {
+        const v = await api.get<ApiContentVersion>(`/api/v1/rules/${name}/versions/${c.options.rev}`)
         const entries = (v.metadata as { entries?: Array<{ sort_key: number; content: string }> })?.entries ?? []
         const content = entries.map(e => e.content.trim()).join('\n\n')
         return { name, version: v.version, content, created_at: v.created_at }

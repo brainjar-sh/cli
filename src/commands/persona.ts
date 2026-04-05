@@ -167,7 +167,7 @@ export const persona = Cli.create('persona', {
     options: z.object({
       project: z.boolean().default(false).describe('Show project persona override (if any)'),
       short: z.boolean().default(false).describe('Print only the active persona name'),
-      version: z.number().optional().describe('Show a specific version from history'),
+      rev: z.number().optional().describe('Show a specific version from history'),
     }),
     async run(c) {
       const api = await getApi()
@@ -178,11 +178,11 @@ export const persona = Cli.create('persona', {
         return state.persona ?? 'none'
       }
 
-      if (c.options.version) {
+      if (c.options.rev) {
         const name = c.args.name
-        if (!name) throw createError(ErrorCode.MISSING_ARG, { message: 'Name is required when using --version' })
+        if (!name) throw createError(ErrorCode.MISSING_ARG, { message: 'Name is required when using --rev' })
         const slug = normalizeSlug(name, 'persona name')
-        const v = await api.get<ApiContentVersion>(`/api/v1/personas/${slug}/versions/${c.options.version}`)
+        const v = await api.get<ApiContentVersion>(`/api/v1/personas/${slug}/versions/${c.options.rev}`)
         return { name: slug, version: v.version, content: v.content, metadata: v.metadata, created_at: v.created_at }
       }
 

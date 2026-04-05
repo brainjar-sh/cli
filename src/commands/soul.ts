@@ -133,7 +133,7 @@ export const soul = Cli.create('soul', {
     options: z.object({
       project: z.boolean().default(false).describe('Show project soul override (if any)'),
       short: z.boolean().default(false).describe('Print only the active soul name'),
-      version: z.number().optional().describe('Show a specific version from history'),
+      rev: z.number().optional().describe('Show a specific version from history'),
     }),
     async run(c) {
       const api = await getApi()
@@ -144,11 +144,11 @@ export const soul = Cli.create('soul', {
         return state.soul ?? 'none'
       }
 
-      if (c.options.version) {
+      if (c.options.rev) {
         const name = c.args.name
-        if (!name) throw createError(ErrorCode.MISSING_ARG, { message: 'Name is required when using --version' })
+        if (!name) throw createError(ErrorCode.MISSING_ARG, { message: 'Name is required when using --rev' })
         const slug = normalizeSlug(name, 'soul name')
-        const v = await api.get<ApiContentVersion>(`/api/v1/souls/${slug}/versions/${c.options.version}`)
+        const v = await api.get<ApiContentVersion>(`/api/v1/souls/${slug}/versions/${c.options.rev}`)
         return { name: slug, version: v.version, content: v.content, created_at: v.created_at }
       }
 
