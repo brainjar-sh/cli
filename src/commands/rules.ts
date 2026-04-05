@@ -247,8 +247,9 @@ export const rules = Cli.create('rules', {
       const name = normalizeSlug(c.args.name, 'rule name')
       const api = await getApi()
 
+      let result: { affected_brains?: string[] } | undefined
       try {
-        await api.delete(`/api/v1/rules/${name}`)
+        result = await api.delete<{ affected_brains?: string[] }>(`/api/v1/rules/${name}`)
       } catch (e) {
         if (e instanceof IncurError && e.code === ErrorCode.NOT_FOUND) {
           throw createError(ErrorCode.RULE_NOT_FOUND, { params: [name] })
@@ -260,7 +261,9 @@ export const rules = Cli.create('rules', {
       const state = await getEffectiveState(api)
       if (state.rules.includes(name)) await sync({ api })
 
-      return { deleted: name }
+      const out: Record<string, unknown> = { deleted: name }
+      if (result?.affected_brains?.length) out.affected_brains = result.affected_brains
+      return out
     },
   })
   .command('drop', {

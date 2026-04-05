@@ -153,6 +153,7 @@ export async function createClient(options?: ClientOptions): Promise<BrainjarCli
       throw new IncurError({ code, message, hint })
     }
 
+    if (response.status === 204) return undefined as T
     return response.json() as Promise<T>
   }
 
