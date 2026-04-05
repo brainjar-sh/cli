@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.7.0
+
+### Minor Changes
+
+- 11fc48b: Remove embedded Postgres support, require external Postgres (BYOP). Show actionable Docker suggestion when Postgres is unreachable. Bump minimum server version to 0.3.0.
+
 ## 0.6.5
 
 ### Patch Changes
