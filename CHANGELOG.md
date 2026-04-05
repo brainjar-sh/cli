@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.6.3
+
+### Patch Changes
+
+- a236614: Rename --version to --rev on show commands to avoid collision with global --version flag
+
 ## 0.6.2
 
 ### Patch Changes
