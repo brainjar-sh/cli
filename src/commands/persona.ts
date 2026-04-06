@@ -5,7 +5,7 @@ const { IncurError } = Errors
 import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
-import { getApi } from '../client.js'
+import { getApi, detectProject } from '../client.js'
 import type { ApiPersona, ApiPersonaList, ApiRuleList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const persona = Cli.create('persona', {
@@ -291,9 +291,11 @@ export const persona = Cli.create('persona', {
       }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      // Sync project file if --project flag is set or if we're in a project directory
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      const result: Record<string, unknown> = { activated: name, project: c.options.project }
+      const result: Record<string, unknown> = { activated: name, project: !!inProject }
       if (bundledRules.length > 0) result.rules = bundledRules
       return result
     },
@@ -340,8 +342,9 @@ export const persona = Cli.create('persona', {
       await putState(api, { persona_slug: '' }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      return { deactivated: true, project: c.options.project }
+      return { deactivated: true, project: !!inProject }
     },
   })

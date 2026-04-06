@@ -31,7 +31,7 @@ const { IncurError } = Errors
  * Minimum server version this CLI is compatible with.
  * Bump when the CLI depends on server features/API changes.
  */
-export const MIN_SERVER_VERSION = '0.3.0'
+export const MIN_SERVER_VERSION = '0.4.0'
 
 export interface HealthStatus {
   healthy: boolean

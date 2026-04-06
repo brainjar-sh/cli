@@ -5,7 +5,7 @@ const { IncurError } = Errors
 import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
-import { getApi } from '../client.js'
+import { getApi, detectProject } from '../client.js'
 import type { ApiRule, ApiRuleList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const rules = Cli.create('rules', {
@@ -233,9 +233,10 @@ export const rules = Cli.create('rules', {
       await putState(api, { rules_to_add: [name] }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      return { activated: name, project: c.options.project }
+      return { activated: name, project: !!inProject }
     },
   })
   .command('delete', {
@@ -284,8 +285,9 @@ export const rules = Cli.create('rules', {
       await putState(api, { rules_to_remove: [name] }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      return { removed: name, project: c.options.project }
+      return { removed: name, project: !!inProject }
     },
   })

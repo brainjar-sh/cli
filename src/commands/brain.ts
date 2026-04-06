@@ -5,7 +5,7 @@ const { IncurError } = Errors
 import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, putState } from '../state.js'
 import { sync } from '../sync.js'
-import { getApi } from '../client.js'
+import { getApi, detectProject } from '../client.js'
 import type { ApiBrain, ApiBrainList, ApiSoul, ApiPersona } from '../api-types.js'
 
 export const brain = Cli.create('brain', {
@@ -120,11 +120,12 @@ export const brain = Cli.create('brain', {
       }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
       return {
         activated: name,
-        project: c.options.project,
+        project: !!inProject,
         soul: config.soul_slug,
         persona: config.persona_slug,
         rules: config.rule_slugs,
@@ -173,9 +174,10 @@ export const brain = Cli.create('brain', {
       await putState(api, { soul_slug: '', persona_slug: '', rule_slugs: [] }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      return { deactivated: true, project: c.options.project }
+      return { deactivated: true, project: !!inProject }
     },
   })
   .command('delete', {

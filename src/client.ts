@@ -60,7 +60,7 @@ async function resolveToken(ctx: ServerContext): Promise<string | null> {
   return null
 }
 
-async function detectProject(explicit?: string | null): Promise<string | null> {
+export async function detectProject(explicit?: string | null): Promise<string | null> {
   if (explicit === null) return null // explicitly suppress auto-detection
   if (explicit) return explicit
   try {

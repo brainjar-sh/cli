@@ -5,7 +5,7 @@ const { IncurError } = Errors
 import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
-import { getApi } from '../client.js'
+import { getApi, detectProject } from '../client.js'
 import type { ApiSoul, ApiSoulList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const soul = Cli.create('soul', {
@@ -250,9 +250,10 @@ export const soul = Cli.create('soul', {
       await putState(api, { soul_slug: name }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      return { activated: name, project: c.options.project }
+      return { activated: name, project: !!inProject }
     },
   })
   .command('delete', {
@@ -297,8 +298,9 @@ export const soul = Cli.create('soul', {
       await putState(api, { soul_slug: '' }, mutationOpts)
 
       await sync({ api })
-      if (c.options.project) await sync({ api, project: true })
+      const inProject = c.options.project || await detectProject()
+      if (inProject) await sync({ api, project: true })
 
-      return { deactivated: true, project: c.options.project }
+      return { deactivated: true, project: !!inProject }
     },
   })

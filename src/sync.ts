@@ -73,7 +73,7 @@ export async function sync(options?: SyncOptions) {
   const opts = options ?? {}
   const api = opts.api ?? await getApi()
 
-  const state = await getEffectiveState(api, opts.project ? { project: basename(process.cwd()) } : undefined)
+  const state = await getEffectiveState(api, opts.project ? { project: basename(process.cwd()) } : { project: null })
   const backend: Backend = opts.backend ?? 'claude'
   const config = getBackendConfig(backend, { local: opts.project })
 
