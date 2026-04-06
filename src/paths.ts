@@ -1,4 +1,5 @@
 import { homedir } from 'node:os'
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** Resolved lazily so tests can override HOME env var. */
@@ -33,6 +34,11 @@ export function getBackendConfig(backend: Backend, options?: { local?: boolean }
 /** Local brainjar dir for per-repo state. */
 export function getLocalDir() {
   return process.env.BRAINJAR_LOCAL_DIR ?? join(process.cwd(), '.brainjar')
+}
+
+/** Create the local .brainjar/ dir so project auto-detection works on future runs. */
+export async function ensureLocalDir(): Promise<void> {
+  await mkdir(getLocalDir(), { recursive: true })
 }
 
 export const paths = {

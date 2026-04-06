@@ -6,6 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi, detectProject } from '../client.js'
+import { ensureLocalDir } from '../paths.js'
 import type { ApiRule, ApiRuleList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const rules = Cli.create('rules', {
@@ -227,6 +228,7 @@ export const rules = Cli.create('rules', {
         throw e
       }
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
@@ -279,6 +281,7 @@ export const rules = Cli.create('rules', {
       const name = normalizeSlug(c.args.name, 'rule name')
       const api = await getApi()
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined

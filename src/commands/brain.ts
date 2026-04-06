@@ -6,6 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi, detectProject } from '../client.js'
+import { ensureLocalDir } from '../paths.js'
 import type { ApiBrain, ApiBrainList, ApiSoul, ApiPersona } from '../api-types.js'
 
 export const brain = Cli.create('brain', {
@@ -110,6 +111,7 @@ export const brain = Cli.create('brain', {
         throw e
       }
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
@@ -168,6 +170,7 @@ export const brain = Cli.create('brain', {
     async run(c) {
       const api = await getApi()
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined

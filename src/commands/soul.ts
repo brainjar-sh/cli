@@ -6,6 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi, detectProject } from '../client.js'
+import { ensureLocalDir } from '../paths.js'
 import type { ApiSoul, ApiSoulList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const soul = Cli.create('soul', {
@@ -244,6 +245,7 @@ export const soul = Cli.create('soul', {
         throw e
       }
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
@@ -292,6 +294,7 @@ export const soul = Cli.create('soul', {
     async run(c) {
       const api = await getApi()
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined

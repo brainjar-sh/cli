@@ -6,6 +6,7 @@ import { ErrorCode, createError } from '../errors.js'
 import { normalizeSlug, getEffectiveState, getStateOverride, putState } from '../state.js'
 import { sync } from '../sync.js'
 import { getApi, detectProject } from '../client.js'
+import { ensureLocalDir } from '../paths.js'
 import type { ApiPersona, ApiPersonaList, ApiRuleList, ApiVersionList, ApiContentVersion } from '../api-types.js'
 
 export const persona = Cli.create('persona', {
@@ -282,6 +283,7 @@ export const persona = Cli.create('persona', {
 
       const bundledRules = personaData.bundled_rules
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
@@ -336,6 +338,7 @@ export const persona = Cli.create('persona', {
     async run(c) {
       const api = await getApi()
 
+      if (c.options.project) await ensureLocalDir()
       const mutationOpts = c.options.project
         ? { project: basename(process.cwd()) }
         : undefined
