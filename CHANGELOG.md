@@ -1,5 +1,11 @@
 # brainjar
 
+## 0.7.3
+
+### Patch Changes
+
+- afa302a: fix: create .brainjar/ dir on first --project use so auto-detection works on subsequent runs
+
 ## 0.7.2
 
 ### Patch Changes
