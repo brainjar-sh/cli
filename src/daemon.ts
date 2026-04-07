@@ -116,6 +116,46 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** Find the PID of a process listening on a TCP port. Returns null if port is free. */
+function findPidOnPort(port: string): number | null {
+  try {
+    // lsof works on both macOS and Linux
+    const output = execFileSync('lsof', ['-ti', `tcp:${port}`], { encoding: 'utf-8', timeout: 5000 })
+    const pid = parseInt(output.trim().split('\n')[0], 10)
+    return Number.isFinite(pid) ? pid : null
+  } catch {
+    return null // lsof exits non-zero when nothing is listening
+  }
+}
+
+/**
+ * Ensure a TCP port is free. If a process is listening, kill it.
+ * Throws if the port cannot be freed.
+ */
+async function ensurePortFree(port: string): Promise<void> {
+  const pid = findPidOnPort(port)
+  if (pid === null) return
+
+  // Try graceful shutdown first
+  try { process.kill(pid, 'SIGTERM') } catch { return }
+
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 100))
+    if (!isAlive(pid)) return
+  }
+
+  // Force kill
+  try { process.kill(pid, 'SIGKILL') } catch {}
+  await new Promise(r => setTimeout(r, 500))
+
+  if (findPidOnPort(port) !== null) {
+    throw createError(ErrorCode.SERVER_START_FAILED, {
+      message: `Port ${port} is still in use after killing PID ${pid}. Cannot start server.`,
+    })
+  }
+}
+
 /** Remove stale PID file if process is dead. Returns true if PID file was stale. */
 async function cleanStalePid(pidFile: string): Promise<boolean> {
   const pid = await readPid(pidFile)
@@ -319,8 +359,15 @@ export async function upgradeServer(): Promise<{ version: string; alreadyLatest:
   await setInstalledServerVersion(version)
 
   // Restart the server on the new binary
+  let port: string
+  try {
+    port = new URL(local.url).port || '7742'
+  } catch {
+    port = '7742'
+  }
+
   await stop()
-  await new Promise(r => setTimeout(r, 1000))
+  await ensurePortFree(port)
   await start()
 
   return { version, alreadyLatest: false }
@@ -508,6 +555,15 @@ export async function ensureRunning(): Promise<void> {
     // We hold the lock — we're responsible for starting
     try {
       await cleanStalePid(local.pid_file)
+
+      // Ensure port is free before starting — handles stale PID file scenario
+      let port: string
+      try {
+        port = new URL(local.url).port || '7742'
+      } catch {
+        port = '7742'
+      }
+      await ensurePortFree(port)
 
       try {
         await start()
