@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { normalizeSlug } from '../src/state.js'
+import { normalizeSlug, validateServerSlug } from '../src/state.js'
+import { ErrorCode } from '../src/errors.js'
 
 describe('normalizeSlug', () => {
   test('returns valid slugs unchanged', () => {
@@ -39,5 +40,39 @@ describe('normalizeSlug', () => {
 
   test('includes label in error message', () => {
     expect(() => normalizeSlug('bad!name', 'soul name')).toThrow('Invalid soul name')
+  })
+})
+
+describe('validateServerSlug', () => {
+  test('accepts valid slugs', () => {
+    expect(() => validateServerSlug('my-soul', 'soul slug')).not.toThrow()
+    expect(() => validateServerSlug('work_dev', 'soul slug')).not.toThrow()
+    expect(() => validateServerSlug('v2', 'soul slug')).not.toThrow()
+  })
+
+  test('accepts null and undefined (unset state)', () => {
+    expect(() => validateServerSlug(null, 'soul slug')).not.toThrow()
+    expect(() => validateServerSlug(undefined, 'soul slug')).not.toThrow()
+  })
+
+  test('accepts empty string (deactivated state)', () => {
+    expect(() => validateServerSlug('', 'soul slug')).not.toThrow()
+  })
+
+  test('rejects path traversal', () => {
+    expect(() => validateServerSlug('../../../etc/passwd', 'soul slug')).toThrow('Server returned invalid soul slug')
+  })
+
+  test('rejects slashes', () => {
+    expect(() => validateServerSlug('a/b', 'soul slug')).toThrow('Server returned invalid soul slug')
+  })
+
+  test('rejects dots', () => {
+    expect(() => validateServerSlug('some.thing', 'soul slug')).toThrow('Server returned invalid soul slug')
+  })
+
+  test('rejects spaces and special characters', () => {
+    expect(() => validateServerSlug('my soul', 'soul slug')).toThrow('Server returned invalid soul slug')
+    expect(() => validateServerSlug('bad!name', 'soul slug')).toThrow('Server returned invalid soul slug')
   })
 })

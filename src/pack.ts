@@ -3,7 +3,7 @@ import { join, dirname, basename } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { Errors } from 'incur'
 import { ErrorCode, createError } from './errors.js'
-import { normalizeSlug, putState } from './state.js'
+import { normalizeSlug, validateServerSlug, putState } from './state.js'
 import { sync } from './sync.js'
 import { getApi } from './client.js'
 import type {
@@ -61,6 +61,10 @@ export async function exportPack(brainName: string, options: ExportOptions = {})
   const slug = normalizeSlug(brainName, 'brain name')
   const api = await getApi()
   const brain = await api.get<ApiBrain>(`/api/v1/brains/${slug}`)
+  validateServerSlug(brain.soul_slug, 'soul slug')
+  validateServerSlug(brain.persona_slug, 'persona slug')
+  for (const r of brain.rule_slugs) validateServerSlug(r, 'rule slug')
+
   const packName = options.name ? normalizeSlug(options.name, 'pack name') : slug
   const version = options.version ?? '0.1.0'
 
@@ -373,6 +377,9 @@ export async function importPack(packDir: string, options: ImportOptions = {}): 
   let activated = false
   if (options.activate) {
     const brain = await api.get<ApiBrain>(`/api/v1/brains/${manifest.brain}`)
+    validateServerSlug(brain.soul_slug, 'soul slug')
+    validateServerSlug(brain.persona_slug, 'persona slug')
+    for (const r of brain.rule_slugs) validateServerSlug(r, 'rule slug')
     await putState(api, {
       soul_slug: brain.soul_slug,
       persona_slug: brain.persona_slug,
