@@ -1,5 +1,14 @@
 # brainjar
 
+## [0.7.4](https://github.com/brainjar-sh/cli/compare/v0.7.3...v0.7.4) (2026-04-07)
+
+
+### Bug Fixes
+
+* kill stale server by port during upgrade and auto-start ([#40](https://github.com/brainjar-sh/cli/issues/40)) ([ff1a104](https://github.com/brainjar-sh/cli/commit/ff1a1043e9e758032849940e7f85ddf5517aee00))
+* use plain v-prefix tags for release-please ([16410a3](https://github.com/brainjar-sh/cli/commit/16410a331c03b6ee42304e4757b7ed169b3c8880))
+* validate server-provided slugs before use in file paths and URLs ([#41](https://github.com/brainjar-sh/cli/issues/41)) ([e9c4ecc](https://github.com/brainjar-sh/cli/commit/e9c4ecc5c09108a31b734c3c1129ae71351e72a1))
+
 ## 0.7.3
 
 ### Patch Changes
