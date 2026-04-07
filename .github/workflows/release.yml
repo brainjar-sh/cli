@@ -7,13 +7,29 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
-  release:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -21,31 +37,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          registry-url: "https://registry.npmjs.org"
       - run: bun install --frozen-lockfile
       - run: bun run check
-
-      - name: Create release PR or publish
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          version: bun run changeset:version
-          publish: bun run changeset:publish
-          title: "chore: version packages"
-          commit: "chore: version packages"
+      - run: npm publish --provenance --access public
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
-
-      - name: Create GitHub release
-        if: steps.changesets.outputs.hasChangesets == 'false' && steps.changesets.outputs.pullRequestNumber == ''
-        run: |
-          VERSION=$(jq -r '.version' package.json)
-          if gh release view "v${VERSION}" > /dev/null 2>&1; then
-            echo "Release v${VERSION} already exists, skipping"
-          else
-            gh release create "v${VERSION}" \
-              --title "v${VERSION}" \
-              --generate-notes
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
