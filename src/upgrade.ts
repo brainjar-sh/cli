@@ -4,8 +4,10 @@ import {
   start,
   status as daemonStatus,
   upgradeServer,
+  tryLock,
   SEMVER_RE,
 } from './daemon.js'
+import { readConfig, localContext } from './config.js'
 import { checkForUpdates } from './version-check.js'
 import { ErrorCode, createError } from './errors.js'
 import pkg from '../package.json'
@@ -97,30 +99,39 @@ export async function upgradeServerBinary(): Promise<ServerResult> {
   const { getInstalledServerVersion } = await import('./version-check.js')
   const installedVersion = (await getInstalledServerVersion()) ?? 'unknown'
 
-  // upgradeServer() stops the server internally before replacing the binary
   const s = await daemonStatus()
   const wasRunning = s.running
 
-  const result = await upgradeServer()
+  // Hold the startup lock across the entire stop→start→healthy cycle.
+  // This prevents ensureRunning() (e.g. from a `brainjar sync` hook) from
+  // racing to start a second server instance after we stop the old one.
+  const config = await readConfig()
+  const lockFile = `${localContext(config).pid_file}.lock`
+  const release = await tryLock(lockFile)
 
-  if (result.alreadyLatest) {
-    if (wasRunning) await start()
-    return { upgraded: false, from: installedVersion, to: result.version, message: 'Already on latest version' }
-  }
+  try {
+    const result = await upgradeServer()
 
-  // Restart if it was running
-  if (wasRunning) {
-    await start()
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 200))
-      const check = await healthCheck({ timeout: 2000 })
-      if (check.healthy) {
-        return { upgraded: true, from: installedVersion, to: result.version, restarted: true }
-      }
+    if (result.alreadyLatest) {
+      return { upgraded: false, from: installedVersion, to: result.version, message: 'Already on latest version' }
     }
-    return { upgraded: true, from: installedVersion, to: result.version, restarted: false, message: 'Upgraded but failed health check after restart' }
-  }
 
-  return { upgraded: true, from: installedVersion, to: result.version }
+    // Restart if it was running
+    if (wasRunning) {
+      await start()
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200))
+        const check = await healthCheck({ timeout: 2000 })
+        if (check.healthy) {
+          return { upgraded: true, from: installedVersion, to: result.version, restarted: true }
+        }
+      }
+      return { upgraded: true, from: installedVersion, to: result.version, restarted: false, message: 'Upgraded but failed health check after restart' }
+    }
+
+    return { upgraded: true, from: installedVersion, to: result.version }
+  } finally {
+    if (release) await release()
+  }
 }

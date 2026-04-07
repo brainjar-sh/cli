@@ -358,7 +358,8 @@ export async function upgradeServer(): Promise<{ version: string; alreadyLatest:
   await downloadAndVerify(binPath, versionBase)
   await setInstalledServerVersion(version)
 
-  // Restart the server on the new binary
+  // Stop the old server so the caller can restart on the new binary.
+  // The caller (upgradeServerBinary) handles restart + health check.
   let port: string
   try {
     port = new URL(local.url).port || '7742'
@@ -368,7 +369,6 @@ export async function upgradeServer(): Promise<{ version: string; alreadyLatest:
 
   await stop()
   await ensurePortFree(port)
-  await start()
 
   return { version, alreadyLatest: false }
 }
@@ -511,7 +511,7 @@ export async function readLogFile(options?: { lines?: number }): Promise<string>
 /**
  * Try to acquire an exclusive lock file. Returns a release function on success, null if already locked.
  */
-async function tryLock(lockFile: string): Promise<(() => Promise<void>) | null> {
+export async function tryLock(lockFile: string): Promise<(() => Promise<void>) | null> {
   try {
     const fd = await open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY)
     await fd.write(String(process.pid))
