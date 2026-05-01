@@ -1,5 +1,11 @@
 # brainjar
 
+## [0.7.6](https://github.com/brainjar-sh/cli/compare/v0.7.5...v0.7.6) (2026-05-01)
+
+End-of-life release. This package is deprecated in favor of the Go
+binary at [brainjar-sh/brainjar](https://github.com/brainjar-sh/brainjar).
+See `DEPRECATED.md` for the rationale and migration steps.
+
 ## [0.7.5](https://github.com/brainjar-sh/cli/compare/v0.7.4...v0.7.5) (2026-04-07)
 
 
